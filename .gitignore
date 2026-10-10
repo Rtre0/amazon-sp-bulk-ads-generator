@@ -52,8 +52,12 @@ tmp/
 out/
 output/
 
-# 例外：亚马逊官方「空白模板」不含任何业务数据，是 test_2 的回归基准，必须保留。
+# 例外 1：亚马逊官方「空白模板」不含任何业务数据，是 test_2 的回归基准，必须保留。
 !samples/AdvertisingBulksheetTemplate-seller.xlsx
+
+# 例外 2：全合成测试样本（假店铺 / 假 ASIN / 通用日文品名，由 tools/make_demo_fixture.py 生成），
+#         保证同事 clone 后无需任何业务文件即可跑通全部验收测试。
+!samples/fixtures/*.xlsx
 
 # ---------------------------------------------------------------------------
 # 4. 系统与日志

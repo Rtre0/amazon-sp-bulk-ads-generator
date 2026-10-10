@@ -7,7 +7,7 @@
   <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white">
   <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">
-  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-254%20assertions-success">
+  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-246%20assertions%20passing-success">
 </p>
 
 ---
@@ -64,12 +64,18 @@ amazon-bulk-ads-generator/
 │   └── ja_zh_dict.json         # 中日名词对照词库（可热更新）
 ├── samples/
 │   ├── AdvertisingBulksheetTemplate-seller.xlsx   # 亚马逊官方空白模板（回归基准）
+│   ├── fixtures/
+│   │   └── sellfox_export_demo.xlsx               # 全合成测试样本（假店铺/假 SKU，可安全公开）
 │   ├── patch_v7_nouns.json                        # 词库增量导入示例
 │   └── example_import_nouns.json                  # 词库导入格式示例
 ├── tools/
-│   └── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
-└── tests/                      # 6 个验收脚本，254 条断言
+│   ├── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
+│   └── make_demo_fixture.py    # 重新生成上面的合成测试样本
+└── tests/                      # 6 个验收脚本，246 条断言（提供真实导出表时 254 条）
 ```
+
+> **关于样本**：仓库里只保留**全合成**样本与亚马逊官方**空白模板** —— 二者都不含任何真实店铺数据。
+> 真实的赛狐导出表 / 生成的 Bulk 表 / 亚马逊回传报告全部被 `.gitignore` 挡在仓库外。
 
 ### 2.3 核心机制
 
@@ -361,7 +367,10 @@ python tools/rebuild_from_report.py <report.xlsx> <输出目录>
 ## 附录 C · 验收测试
 
 ```bash
-# 一键跑全部（test_4 需要后端已在 127.0.0.1:8000 运行）
+# 1) 先启动后端（test_4 会打真实 HTTP 接口）
+python main.py
+
+# 2) 另开一个终端跑全部
 bash tests/run_all.sh
 ```
 
@@ -371,10 +380,19 @@ bash tests/run_all.sh
 | `test_2_end_to_end.py` | 解析 → 预算 → 生成；表头与官方模板逐字比对；字段合规；自检负向用例 |
 | `test_3_dictionary_io.py` | 词库增删改查、原子写入、热重载 |
 | `test_4_http_smoke.py` | 全部 HTTP 接口冒烟（需后端运行） |
-| `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约、真实数据端到端 |
+| `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约 |
 | `test_6_frontend_refresh.js` | 前端「刷新品名匹配」交互（jsdom + 真实 Vue 运行时） |
 
-合计 **254 条断言**。
+**合计 246 条断言**，克隆下来即可全绿（测试只依赖已入库的合成样本，不需要任何业务文件）。
+
+想额外跑**真实导出表**回归（多 8 条断言，共 254 条）？把赛狐导出表放到任意位置并指定环境变量：
+
+```bash
+# Windows (PowerShell)
+$env:SELLFOX_REAL_SAMPLE="D:\导出\parentProductListing.xlsx"; bash tests/run_all.sh
+# macOS / Linux
+SELLFOX_REAL_SAMPLE=~/导出/parentProductListing.xlsx bash tests/run_all.sh
+```
 
 ---
 

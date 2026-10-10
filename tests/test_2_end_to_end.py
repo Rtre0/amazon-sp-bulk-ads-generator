@@ -24,7 +24,10 @@ from core.bulk_generator import (  # noqa: E402
 )
 from core.parser import parse_sellfox_excel_multi_shop  # noqa: E402
 
-SAMPLE = os.path.join(BASE, "samples", "多店铺测试样本", "赛狐导出_多店铺日文品名.xlsx")
+# 主样本 = 已入库的**全合成**导出表（由 tools/make_demo_fixture.py 生成），
+# 保证同事 clone 后无需任何业务文件即可跑通全部断言。
+# 真实业务导出表（含店铺数据，不进仓库）的回归见 test_5 第 [6] 节。
+SAMPLE = os.path.join(BASE, "samples", "fixtures", "sellfox_export_demo.xlsx")
 TEMPLATE = os.path.join(BASE, "samples", "AdvertisingBulksheetTemplate-seller.xlsx")
 OK = 0
 FAIL = 0

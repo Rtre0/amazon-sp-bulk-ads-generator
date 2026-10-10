@@ -159,9 +159,16 @@ finally:
 check("断网下匹配结果不变", blocked_ok, err)
 
 # ---------------------------------------------------------------- 6. 真实数据端到端
-print("\n[6] 真实 10988 行导出表端到端验收")
-REAL = "C:/Users/Administrator/Downloads/parentProductListing2026-10-10_0(1).xlsx"
-if os.path.exists(REAL):
+print("\n[6] 真实导出表端到端验收（可选）")
+# 真实业务导出表含店铺数据，**不进仓库**。按以下顺序探测，命中才跑：
+#   1) 环境变量 SELLFOX_REAL_SAMPLE 指向的文件
+#   2) samples/real/sellfox_export_real.xlsx
+REAL_CANDIDATES = [
+    os.environ.get("SELLFOX_REAL_SAMPLE", ""),
+    os.path.join(BASE, "samples", "real", "sellfox_export_real.xlsx"),
+]
+REAL = next((p for p in REAL_CANDIDATES if p and os.path.exists(p)), None)
+if REAL:
     from core.parser import parse_sellfox_excel_multi_shop  # noqa: E402
 
     t0 = time.time()
@@ -215,7 +222,8 @@ if os.path.exists(REAL):
           len(qty_start) == 0 or len(qty_hit) == len(qty_start),
           f"{len(qty_hit)}/{len(qty_start)}")
 else:
-    print(f"     [SKIP] 未找到真实样例：{REAL}")
+    print("     [SKIP] 未提供真实导出表（含业务数据，不进仓库）。")
+    print("            如需启用：set SELLFOX_REAL_SAMPLE=<导出表绝对路径> 后重跑。")
 
 # ---------------------------------------------------------------- 7. 词库一致性
 print("\n[7] 词库一致性：种子词不含黑名单 / 无重复")

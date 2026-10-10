@@ -11,7 +11,7 @@ import uuid
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 API = "http://127.0.0.1:8000"
-SAMPLE = os.path.join(BASE, "samples", "多店铺测试样本", "赛狐导出_多店铺日文品名.xlsx")
+SAMPLE = os.path.join(BASE, "samples", "fixtures", "sellfox_export_demo.xlsx")
 sys.stdout.reconfigure(encoding="utf-8")
 
 OK = FAIL = 0
@@ -63,7 +63,7 @@ print("\n[1] POST /api/analyze（上传赛狐多店铺样本）")
 raw = open(SAMPLE, "rb").read()
 t0 = time.time()
 resp = post_multipart(f"{API}/api/analyze", {},
-                      {"file": ("赛狐导出_多店铺日文品名.xlsx", raw)})
+                      {"file": ("sellfox_export_demo.xlsx", raw)})
 data = json.loads(resp.read().decode("utf-8"))
 dt = time.time() - t0
 shops = data["shops"]
@@ -106,7 +106,12 @@ from core.bulk_generator import OFFICIAL_COLUMNS  # noqa: E402
 ws = openpyxl.load_workbook(out_path)["Sponsored Products Campaigns"]
 print(f"     行数 {ws.max_row - 1}  列数 {ws.max_column}")
 check("列数 32（31 官方列 + ASIN 辅助）", ws.max_column == 32, str(ws.max_column))
-check("行数 = 583", ws.max_row - 1 == 583, str(ws.max_row - 1))
+# 结构自洽：Campaign(1) + AdGroup(1) + BiddingAdjustment(2) + ProductTargeting(4) = 8 行/父体，外加每个子体 1 行
+_n_parent = len(all_products)
+_n_child = sum(int(p.get("child_count") or len(p.get("children") or [])) for p in all_products)
+check("行数 = 8×父体 + 子体（结构自洽）",
+      ws.max_row - 1 == 8 * _n_parent + _n_child,
+      f"实际 {ws.max_row - 1} / 期望 {8 * _n_parent + _n_child}（父体 {_n_parent} 子体 {_n_child}）")
 _hdr = [c.value for c in ws[1]]
 check("表头前 31 列 = 官方模板", _hdr[:31] == OFFICIAL_COLUMNS, str(_hdr[25:28]))
 check("第 27 列为 拓展商品投放编号", _hdr[26] == "拓展商品投放编号", repr(_hdr[26]))
@@ -161,8 +166,8 @@ check("total_count 正确", imp.get("total_count") == before + 2, str(imp.get("t
 resp5 = post_multipart(f"{API}/api/analyze", {}, {"file": ("s.xlsx", raw)})
 d5 = json.loads(resp5.read().decode("utf-8"))
 names = {p["parent_sku"]: p["product_name"] for s in d5["shops"].values() for p in s["products"]}
-print(f"     ff061 -> {names.get('ff061')}")
-check("解析仍正常", names.get("ff061") == "加湿器", str(names.get("ff061")))
+print(f"     dma001 -> {names.get('dma001')}")
+check("解析仍正常", names.get("dma001") == "折叠桌", str(names.get("dma001")))
 
 # 清理导入的测试词条
 for k in (k1, k2):
