@@ -2,12 +2,12 @@
 
 > 亚马逊 Sponsored Products 广告批量表生成工作台 —— 从**赛狐 ERP 导出表**到**亚马逊 Bulk Operations 官方模板**的一键自适应转换。
 
-<p>
-  <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
-  <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white">
-  <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white">
-  <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">
-  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-246%20assertions%20passing-success">
+<p>  
+  <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">  
+  <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi\&logoColor=white">  
+  <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">  
+  <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">  
+  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-254%20assertions-success">  
 </p>
 
 ---
@@ -26,13 +26,13 @@
 
 **核心特性**
 
-| 能力 | 说明 |
-|---|---|
-| **多店铺隔离** | 单文件支持 **16+ 个店铺**混合导出；按「店铺」列分层聚合，各店铺**独立**计算价格中位数，互不污染 |
-| **自适应表头嗅探** | 不要求固定列序 / 固定表头行。启发式扫描前若干行找真实表头，再按「别名库 + 有效值密度」择优定位每一列 |
+| 能力           | 说明                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------- |
+| **多店铺隔离**    | 单文件支持 **16+ 个店铺**混合导出；按「店铺」列分层聚合，各店铺**独立**计算价格中位数，互不污染                                  |
+| **自适应表头嗅探**  | 不要求固定列序 / 固定表头行。启发式扫描前若干行找真实表头，再按「别名库 + 有效值密度」择优定位每一列                                   |
 | **客单价加权预算池** | 两种策略：`等权预算`（每个活动相同）/ `客单价加权总预算池`（`Budget_i = max(100, Pool × P_i / ΣP_k)`），按价格中位数比率自动分配 |
-| **纯离线名词词库** | 日文标题 → 中文品名的匹配**完全离线**（零网络、零延迟、零封禁风险）。377 条纯净名词 + 位置优先 / 长词优先双规则 + 一键热更新 |
-| **官方模板零漂移** | 输出表头与亚马逊官方模板 `商品推广活动` 工作表 **31 列逐字对齐**；上传前本地自检拦截，杜绝「生成了才发现被拒」 |
+| **纯离线名词词库**  | 日文标题 → 中文品名的匹配**完全离线**（零网络、零延迟、零封禁风险）。377 条纯净名词 + 位置优先 / 长词优先双规则 + 一键热更新                |
+| **官方模板零漂移**  | 输出表头与亚马逊官方模板 `商品推广活动` 工作表 **31 列逐字对齐**；上传前本地自检拦截，杜绝「生成了才发现被拒」                           |
 
 ---
 
@@ -40,18 +40,19 @@
 
 ### 2.1 技术栈
 
-| 层 | 技术 |
-|---|---|
-| **后端** | FastAPI + Uvicorn（ASGI）、Pandas、NumPy、OpenPyXL |
-| **前端** | 单页应用（SPA）：Vue 3 + TailwindCSS（CDN 引入，**无需 npm / 构建**） |
+| 层      | 技术                                                               |
+| ------ | ---------------------------------------------------------------- |
+| **后端** | FastAPI + Uvicorn（ASGI）、Pandas、NumPy、OpenPyXL                    |
+| **前端** | 单页应用（SPA）：Vue 3 + TailwindCSS（CDN 引入，**无需 npm / 构建**）            |
 | **数据** | 本地 JSON 词库 `data/ja_zh_dict.json`（原子写入 `os.replace` + mtime 热重载） |
-| **网络** | **运行时零外部依赖**：不调用任何翻译 / 广告 / 第三方 API |
+| **网络** | **运行时零外部依赖**：不调用任何翻译 / 广告 / 第三方 API                              |
 
 ### 2.2 目录结构
 
 ```
 amazon-bulk-ads-generator/
 ├── main.py                     # FastAPI 入口：路由 + 启动
+├── start.bat                   # Windows 一键启动（自动建 venv、装依赖、开浏览器）
 ├── requirements.txt            # Python 依赖
 ├── core/
 │   ├── parser.py               # 赛狐导出表自适应解析（表头嗅探 / 别名 / 多店铺聚合）
@@ -64,18 +65,12 @@ amazon-bulk-ads-generator/
 │   └── ja_zh_dict.json         # 中日名词对照词库（可热更新）
 ├── samples/
 │   ├── AdvertisingBulksheetTemplate-seller.xlsx   # 亚马逊官方空白模板（回归基准）
-│   ├── fixtures/
-│   │   └── sellfox_export_demo.xlsx               # 全合成测试样本（假店铺/假 SKU，可安全公开）
 │   ├── patch_v7_nouns.json                        # 词库增量导入示例
 │   └── example_import_nouns.json                  # 词库导入格式示例
 ├── tools/
-│   ├── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
-│   └── make_demo_fixture.py    # 重新生成上面的合成测试样本
-└── tests/                      # 6 个验收脚本，246 条断言（提供真实导出表时 254 条）
+│   └── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
+└── tests/                      # 6 个验收脚本，254 条断言
 ```
-
-> **关于样本**：仓库里只保留**全合成**样本与亚马逊官方**空白模板** —— 二者都不含任何真实店铺数据。
-> 真实的赛狐导出表 / 生成的 Bulk 表 / 亚马逊回传报告全部被 `.gitignore` 挡在仓库外。
 
 ### 2.3 核心机制
 
@@ -161,9 +156,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
-启动后访问：**http://127.0.0.1:8000**
+启动后访问：**<http://127.0.0.1:8000>**
 
 > 终端会打印当前词库条数，例如：`本地词库：377 条 (…/data/ja_zh_dict.json)`
+
+#### Windows 一键启动（免敲命令）
+
+不想每次敲命令的话，直接**双击项目根目录的 `start.bat`** 即可：
+
+- 首次运行会自动创建 `venv` 并安装依赖（约 1-2 分钟）；
+- 之后每次双击就直接启动服务并自动打开浏览器；
+- **关闭那个黑窗口 = 停止服务**。
+
+> 前提：机器上已安装 Python 3.10+，且安装时勾选了 *Add Python to PATH*。
 
 ### 3.3 使用流程
 
@@ -179,20 +184,20 @@ python main.py
 
 导出时**必须勾选以下 10 个指标**，缺一不可（尤其是「店铺」和「价格」）：
 
-| # | 指标 | 用途 | 是否必需 |
-|---|---|---|---|
-| 1 | **类型** | 区分父体 / 子体（判定父子关系） | ✅ 必需 |
-| 2 | **父ASIN** | 父体聚合键之一 | ✅ 必需 |
-| 3 | **ASIN** | 子体标识、Bulk 表 ASIN 列 | ✅ 必需 |
-| 4 | **MSKU** | 子体标识、Bulk 表 SKU 列 | ✅ 必需 |
-| 5 | **标题** | 日文原标题 → 中文品名匹配的输入 | ✅ 必需 |
-| 6 | **品名** | 备用展示名（匹配失败时兜底参考） | ✅ 必需 |
-| 7 | **SKU** | 父 SKU 识别（`parent_sku`） | ✅ 必需 |
-| 8 | **店铺** | **多店铺隔离分层键** | ✅ 必需 |
-| 9 | **价格** | 客单价中位数 / 加权预算池 | ✅ 必需 |
-| 10 | **图片** | 页面预览缩略图 | 建议勾选 |
+| #  | 指标        | 用途                     | 是否必需 |
+| -- | --------- | ---------------------- | ---- |
+| 1  | **类型**    | 区分父体 / 子体（判定父子关系）      | ✅ 必需 |
+| 2  | **父ASIN** | 父体聚合键之一                | ✅ 必需 |
+| 3  | **ASIN**  | 子体标识、Bulk 表 ASIN 列     | ✅ 必需 |
+| 4  | **MSKU**  | 子体标识、Bulk 表 SKU 列      | ✅ 必需 |
+| 5  | **标题**    | 日文原标题 → 中文品名匹配的输入      | ✅ 必需 |
+| 6  | **品名**    | 备用展示名（匹配失败时兜底参考）       | ✅ 必需 |
+| 7  | **SKU**   | 父 SKU 识别（`parent_sku`） | ✅ 必需 |
+| 8  | **店铺**    | **多店铺隔离分层键**           | ✅ 必需 |
+| 9  | **价格**    | 客单价中位数 / 加权预算池         | ✅ 必需 |
+| 10 | **图片**    | 页面预览缩略图                | 建议勾选 |
 
-> 列的顺序、表头所在行**都无所谓** —— 解析器会自动嗅探。
+> 列的顺序、表头所在行**都无所谓** —— 解析器会自动嗅探。  
 > 但如果缺少「店铺」列，多店铺会全部归到一个分组；缺少「价格」列会回落到默认基准价 2000。
 
 ---
@@ -245,32 +250,39 @@ python main.py
 ## 6. 常见问题与排错（FAQ）
 
 <details>
+
 <summary><b>Q1. 上传后亚马逊报「无效实体 / Invalid entity」？</b></summary>
 
-说明「实体层级」列的取值不被识别。本项目已按 Bulksheet 2.0 规范固定为：
+说明「实体层级」列的取值不被识别。本项目已按 Bulksheet 2.0 规范固定为：  
 `Campaign` / `Ad Group` / `Product Ad` / `Keyword` / `Negative Keyword` / `Product Targeting` / `Negative Product Targeting` / `Bidding Adjustment` 等。
 
 如果出现该错误，请先确认你上传的是**本工具生成的文件**（而不是历史遗留的旧版本文件）。生成器内置 `_validate_output()`，非法值在本地就会被拦下。
+
 </details>
 
 <details>
+
 <summary><b>Q2. 报「以下列缺少值：拓展商品投放编号」？</b></summary>
 
 这是**自动投放表达式列**。官方英文表头叫 `Product Targeting Expression`，亚马逊的中文机翻叫「拓展商品投放编号」（字面像 ID，实际装的是 `close-match` / `loose-match` / `substitutes` / `complements`）。
 
 本工具输出的是**官方 31 列**，该列位于第 27 列，自动投放四行会各自填好受控值。若你手工编辑过表头，请勿改动列名 —— 亚马逊按**表头文字精确匹配**，改一个字的列会被整列忽略，然后报「缺少值」。
+
 </details>
 
 <details>
+
 <summary><b>Q3. 表头识别不出来 / 品名全是「商品」？</b></summary>
 
 分两种情况：
 
 - **解析失败（报 400）**：多半是导出表缺列。请回到赛狐按第 4 节的 10 个指标**重新导出**（特别是「店铺」「价格」「MSKU」「ASIN」）。前端会直接弹出精确原因。
 - **能解析但品名不准**：说明日文标题里的名词没被词库收录。解决路径：`管理` 里补词 → 点 `🔄 刷新品名匹配`。无需重新上传表格。
+
 </details>
 
 <details>
+
 <summary><b>Q4. <code>pip install</code> 依赖冲突 / 装不上？</b></summary>
 
 ```bash
@@ -289,9 +301,11 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 若 `pandas` / `numpy` 编译失败，请确认 Python 版本 ≥ 3.10（推荐 3.11 / 3.12 / 3.13）。
+
 </details>
 
 <details>
+
 <summary><b>Q5. 端口 8000 被占用怎么办？</b></summary>
 
 打开 `main.py`，修改文件末尾：
@@ -299,25 +313,31 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```python
 host, port = "127.0.0.1", 8000     # ← 把 8000 改成其它端口，如 8010
 ```
+
 </details>
 
 <details>
+
 <summary><b>Q6. 生成的表格行数比预期少？</b></summary>
 
 检查「搜索顶部 / 商品页面溢价 (%)」是否填了 `0`。
 
 溢价为 0 属于**空操作**，生成器会跳过对应的 `Bidding Adjustment` 加成行（少一行就少一个被亚马逊校验的字段组合）。若需要加价，把溢价填成非 0 的数字，加成行会重新生成。
+
 </details>
 
 <details>
+
 <summary><b>Q7. 上传后报告里有大量「由于其他行的错误，该行未得到处理」？</b></summary>
 
 这是**级联警告，不是真实错误**。亚马逊只要有少数行报错，其余行就会显示「未得到处理」。
 
 **看报告时只看「错误类型 = 用户输入无效 / 无效实体」的行**，忽略「未处理 / 警告」。修掉真实错误后，级联警告会自动消失。
+
 </details>
 
 <details>
+
 <summary><b>Q8. 想批量试传，但全量文件太大？</b></summary>
 
 用 `tools/rebuild_from_report.py` 可以从亚马逊回传的报错报告反向重建商品集合并重出表格：
@@ -326,28 +346,29 @@ host, port = "127.0.0.1", 8000     # ← 把 8000 改成其它端口，如 8010
 python tools/rebuild_from_report.py <report.xlsx> <输出目录>
 # 产出：全量.xlsx + 测试_仅1个活动.xlsx（子体最少的那个活动，便于先小文件验证）
 ```
+
 </details>
 
 ---
 
 ## 附录 A · API 一览
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| `GET` | `/` | 单页应用入口 |
-| `GET` | `/api/health` | 健康检查（含版本号） |
-| `POST` | `/api/analyze` | 上传赛狐 Excel → 返回按店铺分层的商品聚合与预算建议 |
-| `POST` | `/api/generate` | 提交勾选商品 + 配置 → 下载亚马逊 Bulk Excel |
-| `POST` | `/api/dictionary/import` | 导入中日对照 JSON（持久化 + 清缓存） |
-| `GET` | `/api/dictionary` | 词库统计 + 全部条目 |
-| `GET` | `/api/dictionary/stats` | 词库条数总览 |
-| `GET` | `/api/dictionary/export` | 导出当前词库 JSON |
-| `POST` | `/api/dictionary` | 新增 / 修改一条词条 |
-| `DELETE` | `/api/dictionary` | 删除一条词条 |
-| `POST` | `/api/dictionary/reload` | 从磁盘重载词库 |
-| `POST` | `/api/dictionary/rematch` | 用最新词库重匹配一批标题（不落盘） |
+| 方法       | 路径                        | 说明                             |
+| -------- | ------------------------- | ------------------------------ |
+| `GET`    | `/`                       | 单页应用入口                         |
+| `GET`    | `/api/health`             | 健康检查（含版本号）                     |
+| `POST`   | `/api/analyze`            | 上传赛狐 Excel → 返回按店铺分层的商品聚合与预算建议 |
+| `POST`   | `/api/generate`           | 提交勾选商品 + 配置 → 下载亚马逊 Bulk Excel |
+| `POST`   | `/api/dictionary/import`  | 导入中日对照 JSON（持久化 + 清缓存）         |
+| `GET`    | `/api/dictionary`         | 词库统计 + 全部条目                    |
+| `GET`    | `/api/dictionary/stats`   | 词库条数总览                         |
+| `GET`    | `/api/dictionary/export`  | 导出当前词库 JSON                    |
+| `POST`   | `/api/dictionary`         | 新增 / 修改一条词条                    |
+| `DELETE` | `/api/dictionary`         | 删除一条词条                         |
+| `POST`   | `/api/dictionary/reload`  | 从磁盘重载词库                        |
+| `POST`   | `/api/dictionary/rematch` | 用最新词库重匹配一批标题（不落盘）              |
 
-交互式文档：启动后访问 **http://127.0.0.1:8000/docs**
+交互式文档：启动后访问 **<http://127.0.0.1:8000/docs>**
 
 ## 附录 B · 输出表头（官方 31 列 + 1 辅助列）
 
@@ -367,32 +388,22 @@ python tools/rebuild_from_report.py <report.xlsx> <输出目录>
 ## 附录 C · 验收测试
 
 ```bash
-# 1) 先启动后端（test_4 会打真实 HTTP 接口）
-python main.py
-
-# 2) 另开一个终端跑全部
+# 一键跑全部（test_4 需要后端已在 127.0.0.1:8000 运行）
 bash tests/run_all.sh
 ```
 
-| 脚本 | 覆盖内容 |
-|---|---|
+| 脚本                        | 覆盖内容                      |
+| ------------------------- | ------------------------- |
 | `test_1_noun_matching.py` | 名词匹配五项准则、修饰词后缀、性能、倒排索引一致性 |
-| `test_2_end_to_end.py` | 解析 → 预算 → 生成；表头与官方模板逐字比对；字段合规；自检负向用例 |
-| `test_3_dictionary_io.py` | 词库增删改查、原子写入、热重载 |
-| `test_4_http_smoke.py` | 全部 HTTP 接口冒烟（需后端运行） |
-| `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约 |
+
+
+| `test_2_end_to_end.py` | 解析 → 预算 → 生成；表头与官方模板逐字比对；字段合规；自检负向用例 |  
+| `test_3_dictionary_io.py` | 词库增删改查、原子写入、热重载 |  
+| `test_4_http_smoke.py` | 全部 HTTP 接口冒烟（需后端运行） |  
+| `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约、真实数据端到端 |  
 | `test_6_frontend_refresh.js` | 前端「刷新品名匹配」交互（jsdom + 真实 Vue 运行时） |
 
-**合计 246 条断言**，克隆下来即可全绿（测试只依赖已入库的合成样本，不需要任何业务文件）。
-
-想额外跑**真实导出表**回归（多 8 条断言，共 254 条）？把赛狐导出表放到任意位置并指定环境变量：
-
-```bash
-# Windows (PowerShell)
-$env:SELLFOX_REAL_SAMPLE="D:\导出\parentProductListing.xlsx"; bash tests/run_all.sh
-# macOS / Linux
-SELLFOX_REAL_SAMPLE=~/导出/parentProductListing.xlsx bash tests/run_all.sh
-```
+合计 **254 条断言**。
 
 ---
 
