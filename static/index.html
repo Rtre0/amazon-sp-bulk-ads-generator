@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>亚马逊 SP 广告批量生成工作台 · 多店铺隔离版</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    [v-cloak] { display: none; }
+    .fade-enter-active, .fade-leave-active { transition: opacity .2s ease; }
+    .fade-enter-from, .fade-leave-to { opacity: 0; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen antialiased">
+  <div id="app" v-cloak class="max-w-[1440px] mx-auto px-5 py-6">
+
+    <!-- 顶部导航 -->
+    <header class="mb-6 flex flex-wrap gap-4 justify-between items-center bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+      <div>
+        <h1 class="text-xl font-bold text-slate-900 flex items-center gap-2.5">
+          <span class="w-2.5 h-6 bg-blue-600 rounded-sm"></span>
+          亚马逊 SP 广告批量生成工作台
+        </h1>
+        <p class="text-xs text-slate-500 mt-1.5">
+          店铺隔离 · 纯离线名词库提取品名 · SKU 实时检索 · 等权 / 客单价加权预算池
+        </p>
+      </div>
+
+      <div class="flex items-end gap-3">
+        <!-- 本地纯净名词词库：条目数 / 一键导入 / 管理 -->
+        <div class="flex items-center gap-2.5 bg-slate-100 px-3 py-2 rounded-lg border border-slate-200 mb-0.5">
+          <span class="text-xs text-slate-600 whitespace-nowrap">
+            本地词库 <strong class="text-blue-700">{{ dictStats.count }}</strong> 个
+          </span>
+          <input type="file" ref="dictInput" @change="importDict" class="hidden" accept=".json" />
+          <button @click="$refs.dictInput.click()"
+                  class="text-xs text-blue-600 hover:text-blue-800 font-semibold underline whitespace-nowrap"
+                  title="上传 AI 清洗后的纯净中日对照 JSON 文件">
+            导入对照表 JSON
+          </button>
+          <button @click="refreshNameMatching" :disabled="!shopList.length || refreshingNames"
+                  class="text-xs text-emerald-700 hover:text-emerald-900 font-semibold underline whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
+                  :title="shopList.length ? '用当前最新词库重新匹配全部已加载商品的原始日文标题（无需重新上传表格）' : '请先上传赛狐导出表'">
+            {{ refreshingNames ? '刷新中…' : '刷新品名匹配' }}
+          </button>
+          <button @click="openDict"
+                  class="text-xs text-slate-500 hover:text-slate-800 whitespace-nowrap border-l border-slate-300 pl-2.5"
+                  title="查看 / 编辑本地词库 data/ja_zh_dict.json">
+            管理
+          </button>
+        </div>
+        <div v-if="shopList.length">
+          <label class="block text-xs font-semibold text-slate-600 mb-1">当前店铺</label>
+          <select v-model="selectedShop" @change="onShopChange"
+                  class="border border-blue-400 bg-blue-50 text-blue-900 font-medium rounded-lg px-3 py-1.5 text-sm outline-none shadow-sm min-w-[180px]">
+            <option v-for="shop in shopList" :key="shop" :value="shop">{{ shop }}</option>
+          </select>
+        </div>
+      </div>
+    </header>
+
+    <!-- 上传区 -->
+    <section
+      @dragover.prevent="dragging = true"
+      @dragleave.prevent="dragging = false"
+      @drop.prevent="onDrop"
+      :class="['bg-white border-2 border-dashed rounded-xl p-7 text-center mb-6 transition-colors',
+               dragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-blue-400']">
+      <input type="file" ref="fileInput" @change="handleFileUpload" class="hidden" accept=".xlsx,.xls" />
+      <button @click="$refs.fileInput.click()"
+              class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg shadow-sm text-sm transition-colors">
+        上传赛狐导出的 Excel 文件
+      </button>
+      <p class="text-xs text-slate-400 mt-2.5">支持拖拽 · 自动多店铺分类 · 本地名词库提取日文品名（零联网） · 识别父子变体与真实售价</p>
+      <p v-if="fileName" class="mt-2 text-xs text-blue-600 font-medium">已加载：{{ fileName }}</p>
+      <p v-if="loading" class="mt-3 text-sm text-blue-600 animate-pulse">{{ loadingText }}</p>
+      <p v-if="error" class="mt-3 text-sm text-red-600">{{ error }}</p>
+    </section>
+
+    <!-- 主控面板 -->
+    <div v-if="currentShopData" class="space-y-5">
+
+      <!-- 策略与预算分配 -->
+      <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <h2 class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2.5">投放与预算策略</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">竞价策略</label>
+            <select v-model="settings.bidding_strategy" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="Fixed bid">固定竞价 (Fixed bid)</option>
+              <option value="Dynamic bids - down only">仅降低 (Dynamic down)</option>
+              <option value="Dynamic bids - up and down">提高和降低 (Dynamic up &amp; down)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组默认竞价 (JPY)</label>
+            <input type="number" min="0" v-model.number="settings.default_bid" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">搜索顶部 / 商品页面溢价 (%)</label>
+            <div class="flex gap-2">
+              <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" placeholder="Top 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" placeholder="Prod 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <p class="mt-1 text-[11px] leading-4 text-slate-400">填 0 = 不做加成，该广告位加成行不会生成（避免空操作行）。</p>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (紧密/宽泛/同类/关联)</label>
+            <div class="grid grid-cols-4 gap-1.5">
+              <input type="number" v-model.number="settings.bid_close" title="紧密匹配 close-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" v-model.number="settings.bid_loose" title="宽泛匹配 loose-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" v-model.number="settings.bid_substitutes" title="同类商品 substitutes" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" v-model.number="settings.bid_complements" title="关联商品 complements" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组合编号 (可选)</label>
+            <input v-model="settings.portfolio_id" placeholder="留空则不写入" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div class="md:col-span-3 flex flex-wrap items-end gap-x-6 gap-y-2 pb-1">
+            <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+              <input type="checkbox" v-model="settings.include_placement" class="accent-blue-600 w-4 h-4" />
+              生成广告位加成行（搜索顶部 / 商品页面）
+            </label>
+            <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+              <input type="checkbox" v-model="settings.include_targeting" class="accent-blue-600 w-4 h-4" />
+              生成 4 组自动匹配 Targeting 行（含独立竞价）
+            </label>
+          </div>
+        </div>
+
+        <!-- 预算分配模式 -->
+        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-6">
+            <span class="text-xs font-bold text-slate-700">预算分配模式：</span>
+            <label class="inline-flex items-center text-xs cursor-pointer">
+              <input type="radio" value="equal" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
+              <span class="ml-1.5 font-medium">等权预算（每个活动相同）</span>
+            </label>
+            <label class="inline-flex items-center text-xs cursor-pointer">
+              <input type="radio" value="weighted" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
+              <span class="ml-1.5 font-medium">客单价加权总预算池</span>
+            </label>
+          </div>
+
+          <div class="flex items-center gap-2.5">
+            <template v-if="budgetMode === 'equal'">
+              <span class="text-xs text-slate-600">单个活动预算：</span>
+              <input type="number" min="0" v-model.number="singleBudgetInput" @input="recalculateBudgets"
+                     class="w-24 border border-slate-300 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <span class="text-xs text-slate-500">JPY</span>
+            </template>
+            <template v-else>
+              <span class="text-xs text-slate-600">已选活动总预算池：</span>
+              <input type="number" min="0" v-model.number="totalPoolBudgetInput" @input="recalculateBudgets"
+                     class="w-28 border border-blue-400 bg-white rounded px-2 py-1.5 text-sm text-right font-bold text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <span class="text-xs text-slate-500">JPY</span>
+            </template>
+          </div>
+        </div>
+        <p v-if="budgetMode === 'weighted' && selectedProducts.length" class="text-[11px] text-slate-500 mt-2">
+          已选 {{ selectedProducts.length }} 个活动 · 合计分配 <strong class="text-blue-600">{{ fmt(assignedTotal) }}</strong> JPY
+          （按客单价占比分配，单活动最低 100 JPY，合计可能略高于预算池）
+        </p>
+      </section>
+
+      <!-- 检索与统计 -->
+      <section class="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200">
+        <div class="flex flex-wrap items-center gap-4">
+          <div class="relative w-64">
+            <input v-model="skuSearchKeyword" placeholder="搜索父 SKU 或品名（如 mj / ff061）..."
+                   class="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <span class="absolute left-2.5 top-1.5 text-slate-400 text-xs">🔍</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-slate-500">排序</span>
+            <select v-model="sortMode" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="sku_asc">父 SKU 升序 (A→Z)</option>
+              <option value="sku_desc">父 SKU 降序 (Z→A)</option>
+              <option value="price_desc">客单价 高→低</option>
+            </select>
+          </div>
+          <div class="text-xs text-slate-500">
+            中位数客单价：<strong class="text-slate-800">¥{{ fmt(currentShopData.median_price) }}</strong> ·
+            当前展示：<strong>{{ filteredProducts.length }}</strong> / {{ currentShopData.products.length }} 个 ·
+            已勾选：<strong class="text-blue-600">{{ selectedProducts.length }}</strong> 个
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button @click="toggleSelectFiltered" :disabled="!filteredProducts.length"
+                  class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
+            {{ isAllFilteredSelected ? '取消勾选当前' : '全选当前结果' }}
+          </button>
+          <button @click="exportBulkExcel" :disabled="selectedProducts.length === 0 || exporting"
+                  class="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+            {{ exporting ? '生成中…' : `导出亚马逊 Bulk Excel (${selectedProducts.length})` }}
+          </button>
+        </div>
+      </section>
+
+      <!-- 商品表 -->
+      <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs min-w-[980px]">
+            <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200">
+              <tr>
+                <th class="p-3 w-12 text-center">
+                  <input type="checkbox" :checked="isAllFilteredSelected" @change="toggleSelectFiltered" class="accent-blue-600 w-4 h-4" />
+                </th>
+                <th class="p-3 w-14 text-center">图片</th>
+                <th class="p-3 cursor-pointer select-none hover:text-blue-600 whitespace-nowrap" @click="toggleSkuSort"
+                    :title="'点击切换父 SKU 排序（当前：' + sortLabel + '）'">
+                  父 SKU
+                  <span class="ml-1 text-xs font-bold text-blue-600">{{ skuSortIcon }}</span>
+                </th>
+                <th class="p-3">清洗后品名（核心首词中文 · 可编辑）</th>
+                <th class="p-3 text-center">子体数</th>
+                <th class="p-3 text-right">客单均价 (JPY)</th>
+                <th class="p-3 text-center">中位数比率</th>
+                <th class="p-3 w-36 text-right">分配预算 (JPY)</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="item in filteredProducts" :key="item.parent_sku"
+                  :class="['hover:bg-blue-50/50 transition-colors', item.selected ? '' : 'opacity-45']">
+                <td class="p-3 text-center">
+                  <input type="checkbox" v-model="item.selected" @change="recalculateBudgets" class="accent-blue-600 w-4 h-4" />
+                </td>
+                <td class="p-2 text-center">
+                  <img v-if="item.image_url && !imgErrors[item.parent_sku]" :src="item.image_url" :alt="item.parent_sku"
+                       loading="lazy"
+                       @error="imgErrors[item.parent_sku] = true"
+                       class="w-10 h-10 object-cover rounded border border-slate-200 inline-block bg-white shadow-sm
+                              hover:scale-[2.4] hover:z-50 hover:relative hover:shadow-xl transition-transform duration-150 origin-left cursor-zoom-in" />
+                  <div v-else class="w-10 h-10 bg-slate-100 border border-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 mx-auto">无图</div>
+                </td>
+                <td class="p-3 font-bold text-slate-800 whitespace-nowrap">{{ item.parent_sku }}</td>
+                <td class="p-3">
+                  <div class="flex items-center gap-1.5">
+                    <input v-model="item.product_name"
+                           :title="item.raw_name ? ('原名：' + item.raw_name) : ''"
+                           :class="['border rounded px-2.5 py-1 w-full text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    isNameManuallyEdited(item) ? 'border-amber-400' : 'border-slate-300']" />
+                    <span v-if="isNameManuallyEdited(item)"
+                          class="shrink-0 text-[10px] text-amber-700 bg-amber-100 border border-amber-300 rounded px-1 py-px whitespace-nowrap"
+                          title="已手动改名，点击「刷新品名匹配」时会保留该值">手动</span>
+                  </div>
+                </td>
+                <td class="p-3 text-center font-medium text-slate-600">{{ item.child_count }}</td>
+                <td class="p-3 text-right font-medium text-slate-700">¥{{ fmt(item.avg_price) }}</td>
+                <td class="p-3 text-center">
+                  <span :class="item.median_ratio >= 1.0 ? 'text-rose-600 font-bold' : 'text-slate-400'">{{ item.median_ratio }}x</span>
+                </td>
+                <td class="p-3 text-right">
+                  <input type="number" min="0" v-model.number="item.assigned_budget"
+                         class="border border-slate-300 rounded px-2 py-1 w-24 text-right text-xs font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </td>
+              </tr>
+              <tr v-if="!filteredProducts.length">
+                <td colspan="8" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap justify-between gap-2">
+          <span>品名与预算可直接行内修改；切换预算模式会重算已勾选项，手动改过的值会被覆盖。
+            <strong class="text-slate-600">手动改名（标记「手动」）的品名不会被「刷新品名匹配」覆盖。</strong></span>
+          <span>
+            表头：第 {{ headerRow }} 行
+            <template v-if="resolvedCols.shop"> · 店铺列：{{ resolvedCols.shop }}</template>
+            <template v-if="resolvedCols.price"> · 价格列：{{ resolvedCols.price }}</template>
+            <template v-if="resolvedCols.image"> · 图片列：{{ resolvedCols.image }}</template>
+            <template v-else> · 未找到图片列</template>
+          </span>
+        </div>
+      </section>
+    </div>
+
+    <!-- 空态 -->
+    <section v-if="!currentShopData && !loading" class="text-center text-slate-400 py-16 text-sm">
+      尚未加载数据 — 请上传赛狐「在线产品」导出文件开始
+    </section>
+
+    <!-- 词库管理弹窗 -->
+    <div v-if="dictOpen" class="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center p-4" @click.self="dictOpen = false">
+      <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[86vh] flex flex-col">
+        <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-bold text-slate-800">本地纯净名词词库</h3>
+            <p class="text-[11px] text-slate-400 mt-0.5">
+              {{ dictStats.count }} 条 · 黑名单过滤 {{ dictStats.blacklist_size }} 条 ·
+              <span class="font-mono">{{ dictStats.path }}</span>
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="reloadDict" class="px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 hover:bg-slate-50">从磁盘重载</button>
+            <button @click="dictOpen = false" class="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800">关闭</button>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 border-b border-slate-100 flex flex-wrap gap-2 items-center">
+          <input v-model="dictSearch" placeholder="搜索日文词或中文词…"
+                 class="flex-1 min-w-[180px] border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input v-model="newEntry.ja" placeholder="日文词" class="w-40 border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input v-model="newEntry.zh" placeholder="中文词" class="w-32 border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <button @click="addDictEntry" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium">新增/覆盖</button>
+        </div>
+
+        <div class="overflow-y-auto flex-1">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-50 text-slate-500 sticky top-0">
+              <tr>
+                <th class="p-2.5 w-2/5">日文词</th>
+                <th class="p-2.5 w-2/5">中文词（可编辑）</th>
+                <th class="p-2.5 w-24 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="e in filteredDict" :key="e.ja" class="hover:bg-slate-50">
+                <td class="p-2.5 font-medium text-slate-700">{{ e.ja }}</td>
+                <td class="p-2.5">
+                  <input v-model="e.zh" @change="saveDictEntry(e)"
+                         class="border border-slate-300 rounded px-2 py-1 w-full text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </td>
+                <td class="p-2.5 text-center">
+                  <button @click="deleteDictEntry(e.ja)" class="text-rose-500 hover:text-rose-700">删除</button>
+                </td>
+              </tr>
+              <tr v-if="!filteredDict.length">
+                <td colspan="3" class="p-6 text-center text-slate-400">没有匹配的词条</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="px-5 py-3 border-t border-slate-200 text-[11px] text-slate-400">
+          Key 只应填写「纯物理实体名词」（如 <span class="font-mono">包丁立て</span> 而非 <span class="font-mono">包丁</span>），
+          修饰词 / 动词 / 场景词会被自动拒绝。修改立即持久化到 JSON，无需重启；也可直接编辑
+          <span class="font-mono">data/ja_zh_dict.json</span> 后点「从磁盘重载」。
+        </div>
+      </div>
+    </div>
+
+    <transition name="fade">
+      <div v-if="toast" class="fixed bottom-6 right-6 bg-slate-900 text-white text-sm px-5 py-3 rounded-lg shadow-lg">{{ toast }}</div>
+    </transition>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+
+    const DEFAULT_SETTINGS = () => ({
+      bidding_strategy: 'Fixed bid',
+      default_bid: 25,
+      placement_top_pct: 0,
+      placement_product_pct: 0,
+      bid_close: 25,
+      bid_loose: 20,
+      bid_substitutes: 25,
+      bid_complements: 20,
+      portfolio_id: '',
+      include_placement: true,
+      include_targeting: true
+    });
+
+    createApp({
+      setup() {
+        const allShopsData = ref({});
+        const shopList = ref([]);
+        const selectedShop = ref('');
+        const skuSearchKeyword = ref('');
+        const budgetMode = ref('equal');
+        const singleBudgetInput = ref(100);
+        const totalPoolBudgetInput = ref(10000);
+        const sortMode = ref('sku_asc');   // sku_asc | sku_desc | price_desc
+        const imgErrors = ref({});         // 图片加载失败标记 { parent_sku: true }
+
+        // 词库管理
+        const dictOpen = ref(false);
+        const dictSearch = ref('');
+        const dictEntries = ref([]);
+        const dictStats = ref({ count: 0, blacklist_size: 0, path: '' });
+        const dictInput = ref(null);
+        const newEntry = ref({ ja: '', zh: '' });
+
+        // 「手动改名」判定：每个商品记住词库自动生成的名字（_auto_name），
+        // 当前值与自动名不一致即视为用户手动改过 —— 刷新品名时会保留。
+        const isNameManuallyEdited = (item) =>
+          item && item._auto_name !== undefined && item.product_name !== item._auto_name;
+
+        // 跨店铺唯一键（店铺 + 父 SKU）
+        const itemKey = (shop, item) => `${shop}||${item.parent_sku}`;
+
+        const filteredDict = computed(() => {
+          const kw = dictSearch.value.trim().toLowerCase();
+          if (!kw) return dictEntries.value;
+          return dictEntries.value.filter(e =>
+            (e.ja || '').toLowerCase().includes(kw) || (e.zh || '').toLowerCase().includes(kw));
+        });
+
+        const fileName = ref('');
+        const loading = ref(false);
+        const loadingText = ref('');
+        const exporting = ref(false);
+        const refreshingNames = ref(false);
+        const dragging = ref(false);
+        const error = ref('');
+        const toast = ref('');
+        const headerRow = ref(1);
+        const resolvedCols = ref({});
+        const settings = ref(DEFAULT_SETTINGS());
+
+        const fmt = (n) => Number(n || 0).toLocaleString('ja-JP');
+        const showToast = (m) => { toast.value = m; setTimeout(() => (toast.value = ''), 2600); };
+
+        const currentShopData = computed(() => allShopsData.value[selectedShop.value] || null);
+
+        // 自然排序比较（hlx002 < hlx032 < hlx104）
+        const naturalCompare = (a, b) =>
+          String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+
+        const sortLabel = computed(() =>
+          sortMode.value === 'price_desc' ? '客单价 高→低' : (sortMode.value === 'sku_asc' ? '父 SKU 升序' : '父 SKU 降序'));
+
+        const skuSortIcon = computed(() =>
+          sortMode.value === 'price_desc' ? '' : (sortMode.value === 'sku_asc' ? '▲' : '▼'));
+
+        const toggleSkuSort = () => {
+          sortMode.value = sortMode.value === 'sku_asc' ? 'sku_desc' : 'sku_asc';
+        };
+
+        const filteredProducts = computed(() => {
+          const d = currentShopData.value;
+          if (!d) return [];
+          const kw = skuSearchKeyword.value.trim().toLowerCase();
+          let list = d.products;
+          if (kw) {
+            list = list.filter(p =>
+              (p.parent_sku || '').toLowerCase().includes(kw) ||
+              (p.product_name || '').toLowerCase().includes(kw)
+            );
+          }
+          const sorted = [...list];
+          if (sortMode.value === 'price_desc') {
+            sorted.sort((a, b) => Number(b.avg_price || 0) - Number(a.avg_price || 0));
+          } else {
+            sorted.sort((a, b) => {
+              const res = naturalCompare(a.parent_sku, b.parent_sku);
+              return sortMode.value === 'sku_asc' ? res : -res;
+            });
+          }
+          return sorted;
+        });
+
+        const selectedProducts = computed(() => currentShopData.value
+          ? currentShopData.value.products.filter(p => p.selected) : []);
+
+        const assignedTotal = computed(() => selectedProducts.value
+          .reduce((s, p) => s + Number(p.assigned_budget || 0), 0));
+
+        const isAllFilteredSelected = computed(() =>
+          filteredProducts.value.length > 0 && filteredProducts.value.every(p => p.selected));
+
+        const toggleSelectFiltered = () => {
+          const target = !isAllFilteredSelected.value;
+          filteredProducts.value.forEach(p => { p.selected = target; });
+          recalculateBudgets();
+        };
+
+        const recalculateBudgets = () => {
+          const d = currentShopData.value;
+          if (!d) return;
+          const selected = d.products.filter(p => p.selected);
+          if (!selected.length) return;
+
+          if (budgetMode.value === 'equal') {
+            selected.forEach(p => { p.assigned_budget = Number(singleBudgetInput.value) || 0; });
+          } else {
+            // 客单价加权：按均价占比瓜分总预算池，最低 100 JPY
+            selected.sort((a, b) => b.avg_price - a.avg_price);
+            const sum = selected.reduce((s, p) => s + Number(p.avg_price || 0), 0);
+            selected.forEach(p => {
+              const w = sum > 0 ? Number(p.avg_price) / sum : 1 / selected.length;
+              p.assigned_budget = Math.max(100, Math.round(Number(totalPoolBudgetInput.value) * w));
+            });
+          }
+        };
+
+        const initShop = (shop) => {
+          const d = allShopsData.value[shop];
+          if (!d) return;
+          d.products.forEach(p => { p.selected = true; p.assigned_budget = Number(singleBudgetInput.value) || 100; });
+          recalculateBudgets();
+        };
+
+        const onShopChange = () => {
+          skuSearchKeyword.value = '';
+          initShop(selectedShop.value);
+          showToast(`已切换到店铺：${selectedShop.value}`);
+        };
+
+        const analyzeFile = async (file) => {
+          if (!file) return;
+          error.value = '';
+          loading.value = true;
+          loadingText.value = '正在解析店铺 / 变体 / 价格，并用本地名词库提取品名…';
+          fileName.value = file.name;
+          try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/analyze', { method: 'POST', body: fd });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.detail || '解析失败，请确认是赛狐导出的 Excel 文件');
+
+            allShopsData.value = json.shops || {};
+            imgErrors.value = {};
+            // 记录词库自动生成的品名，用于识别「手动改名」
+            Object.keys(allShopsData.value).forEach(shop => {
+              (allShopsData.value[shop].products || []).forEach(p => {
+                p._shop = shop;
+                p._auto_name = p.product_name;
+              });
+            });
+            shopList.value = Object.keys(allShopsData.value);
+            headerRow.value = (json.header_row ?? 0) + 1;
+            resolvedCols.value = json.resolved_columns || {};
+
+            if (!shopList.value.length) {
+              error.value = '未识别到有效商品，请检查文件是否包含 SKU / ASIN / 价格列。';
+              return;
+            }
+            selectedShop.value = shopList.value[0];
+            initShop(selectedShop.value);
+            const total = shopList.value.reduce((s, k) => s + allShopsData.value[k].total_parents, 0);
+            showToast(`解析完成：${shopList.value.length} 个店铺 / ${total} 个父体`);
+          } catch (e) {
+            error.value = e.message || '解析异常';
+            allShopsData.value = {};
+            shopList.value = [];
+          } finally {
+            loading.value = false;
+          }
+        };
+
+        const handleFileUpload = (e) => analyzeFile(e.target.files[0]);
+        const onDrop = (e) => {
+          dragging.value = false;
+          const f = e.dataTransfer.files[0];
+          if (f) analyzeFile(f);
+        };
+
+        const exportBulkExcel = async () => {
+          const selected = selectedProducts.value;
+          if (!selected.length) return;
+          exporting.value = true;
+          try {
+            const payload = {
+              products: selected.map(p => ({
+                parent_sku: p.parent_sku,
+                product_name: p.product_name,
+                assigned_budget: p.assigned_budget,
+                suggested_budget: p.suggested_budget,
+                children: p.children
+              })),
+              settings: settings.value
+            };
+            const res = await fetch('/api/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const j = await res.json().catch(() => ({}));
+              throw new Error(j.detail || '生成失败');
+            }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            a.href = url;
+            a.download = `${selectedShop.value || 'shop'}_SP_Bulk_Ads_${today}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast(`已导出 ${selected.length} 个广告活动`);
+          } catch (e) {
+            error.value = e.message || '导出异常';
+          } finally {
+            exporting.value = false;
+          }
+        };
+
+        // ---- 本地纯净名词词库 ----
+        const loadDict = async () => {
+          try {
+            const res = await fetch('/api/dictionary');
+            if (!res.ok) return;
+            const d = await res.json();
+            dictEntries.value = d.entries || [];
+            dictStats.value = {
+              count: d.count || 0,
+              blacklist_size: d.blacklist_size || 0,
+              path: d.path || ''
+            };
+          } catch (e) { /* 静默 */ }
+        };
+
+        // 仅刷新条目数（顶部栏常驻显示）
+        const refreshDictCount = async () => {
+          try {
+            const res = await fetch('/api/dictionary/stats');
+            if (!res.ok) return;
+            const d = await res.json();
+            dictStats.value = { ...dictStats.value, count: d.total_count || 0 };
+          } catch (e) { /* 静默 */ }
+        };
+
+        const openDict = async () => {
+          dictOpen.value = true;
+          await loadDict();
+        };
+
+        // 导入 AI 清洗后的纯净中日对照 JSON
+        const importDict = async (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const fd = new FormData();
+          fd.append('file', file);
+          try {
+            const res = await fetch('/api/dictionary/import', { method: 'POST', body: fd });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '导入失败'); return; }
+            const purged = d.purged_keys || [];
+            let msg = `导入成功：新增/更新 ${d.imported_count} 条，当前共 ${d.total_count} 条`;
+            if (purged.length) msg += `（已拒绝 ${purged.length} 个非纯名词：${purged.slice(0, 5).join('、')}${purged.length > 5 ? '…' : ''}）`;
+            showToast(msg);
+            await loadDict();
+          } catch (err) {
+            showToast('导入词库失败，请检查是否为规范的 JSON 格式。');
+          } finally {
+            e.target.value = '';   // 允许重复导入同一文件
+          }
+        };
+
+        const reloadDict = async () => {
+          const res = await fetch('/api/dictionary/reload', { method: 'POST' });
+          const d = await res.json();
+          await loadDict();
+          showToast(`已从磁盘重载，共 ${d.total_count} 条`);
+        };
+
+        // ---- 一键刷新品名匹配（导入新词库后无需重新上传表格）----
+        //   范围：当前已加载的「全部店铺」商品
+        //   规则：手动改过名的商品保留原值，其余按最新词库覆盖
+        const refreshNameMatching = async () => {
+          const shops = Object.keys(allShopsData.value);
+          if (!shops.length) { showToast('请先上传赛狐导出表再刷新品名'); return; }
+
+          const items = [];
+          shops.forEach(shop => {
+            (allShopsData.value[shop].products || []).forEach(p => {
+              const raw = (p.raw_name || '').trim();
+              if (raw && p.parent_sku) {
+                items.push({ key: itemKey(shop, p), parent_sku: p.parent_sku, raw_name: raw });
+              }
+            });
+          });
+          if (!items.length) { showToast('没有可用于重匹配的原始日文标题'); return; }
+
+          refreshingNames.value = true;
+          try {
+            const res = await fetch('/api/dictionary/rematch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '刷新品名失败'); return; }
+
+            const matched = d.matched_names || {};
+            let updated = 0, kept = 0, same = 0, miss = 0;
+            shops.forEach(shop => {
+              (allShopsData.value[shop].products || []).forEach(p => {
+                const next = matched[itemKey(shop, p)];
+                if (next === undefined) return;
+                if (isNameManuallyEdited(p)) { kept += 1; return; }   // 保留手动改名
+                if (p.product_name === next) { same += 1; return; }
+                p.product_name = next;
+                p._auto_name = next;                                   // 同步自动名基线
+                updated += 1;
+              });
+            });
+            miss = d.miss_count || 0;
+
+            await refreshDictCount();
+            let msg = `品名已刷新：更新 ${updated} 个`;
+            if (kept) msg += ` · 保留手动改名 ${kept} 个`;
+            if (same) msg += ` · 无变化 ${same} 个`;
+            if (miss) msg += ` · 未收录 ${miss} 个（沿用兜底名）`;
+            showToast(msg);
+          } catch (err) {
+            showToast('刷新品名失败：' + (err.message || '网络异常'));
+          } finally {
+            refreshingNames.value = false;
+          }
+        };
+
+        const addDictEntry = async () => {
+          const ja = (newEntry.value.ja || '').trim();
+          const zh = (newEntry.value.zh || '').trim();
+          if (!ja || !zh) { showToast('日文词与中文词都不能为空'); return; }
+          const res = await fetch('/api/dictionary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ja, zh })
+          });
+          if (!res.ok) { const j = await res.json().catch(() => ({})); showToast(j.detail || '保存失败'); return; }
+          newEntry.value = { ja: '', zh: '' };
+          await loadDict();
+          showToast(`已写入词库：${ja} → ${zh}`);
+        };
+
+        const saveDictEntry = async (e) => {
+          if (!e.zh || !e.zh.trim()) return;
+          await fetch('/api/dictionary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ja: e.ja, zh: e.zh.trim() })
+          });
+          await loadDict();
+          showToast(`已更新：${e.ja}`);
+        };
+
+        const deleteDictEntry = async (ja) => {
+          const res = await fetch('/api/dictionary?ja=' + encodeURIComponent(ja), { method: 'DELETE' });
+          if (!res.ok) { showToast('删除失败'); return; }
+          await loadDict();
+          showToast(`已删除：${ja}`);
+        };
+
+        loadDict();
+
+        return {
+          allShopsData, shopList, selectedShop, currentShopData, filteredProducts,
+          selectedProducts, assignedTotal, isAllFilteredSelected, skuSearchKeyword,
+          settings, budgetMode, singleBudgetInput, totalPoolBudgetInput,
+          sortMode, imgErrors, sortLabel, skuSortIcon, toggleSkuSort,
+          dictOpen, dictSearch, dictEntries, dictStats, dictInput, newEntry, filteredDict,
+          openDict, reloadDict, importDict, refreshDictCount, addDictEntry, saveDictEntry, deleteDictEntry,
+          refreshingNames, refreshNameMatching, isNameManuallyEdited,
+          fileName, loading, loadingText, exporting, dragging, error, toast, headerRow, resolvedCols,
+          fmt, handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
