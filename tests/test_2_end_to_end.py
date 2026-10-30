@@ -298,6 +298,74 @@ for _e in ["Campaign", "Ad Group", "Product Ad", "Bidding Adjustment", "Product 
 for _expr in AUTO_TARGETING:
     _accept(f"四种自动投放表达式均通过（{_expr}）", "Product Targeting", {TARGETING_EXPR_COLUMN: _expr})
 
+print("\n[8] 临时 ID 合规（v10 事故回归：纯数字父 SKU 导致 Create 被拒）")
+from core.bulk_generator import _plan_temp_ids, _temp_id  # noqa: E402
+
+for _raw, _expect in [
+    ("12", "c12"), ("13", "c13"), ("0", "c0"), ("007", "c007"),
+    ("hua12", "hua12"), ("wyy005", "wyy005"), ("huya331", "huya331"),
+]:
+    _got = _temp_id(_raw)
+    check(f"临时 ID 规整 {_raw!r} -> {_expect!r}", _got == _expect, repr(_got))
+
+check("空父 SKU 兜底为非数字", not _temp_id("", 3).isdigit(), repr(_temp_id("", 3)))
+check("None 父 SKU 兜底为非数字", not _temp_id(None, 3).isdigit(), repr(_temp_id(None, 3)))
+
+# 撞车场景：父 SKU '12' 加前缀后与真实父 SKU 'c12' 同名
+_plan = _plan_temp_ids([{"parent_sku": "12"}, {"parent_sku": "c12"}, {"parent_sku": "13"}])
+check("临时 ID 撞车时自动加后缀", len({v[0] for v in _plan.values()}) == 3, str(_plan))
+check("广告组 ID 随活动 ID 派生", _plan["12"][1] == _plan["12"][0] + "_ag", str(_plan["12"]))
+
+# 负向：纯数字 ID 必须被自检拦截
+_reject("拦截纯数字活动编号（v10 事故回归）", "Campaign", {"广告活动编号": "12"})
+_reject("拦截纯数字广告组编号", "Ad Group", {"广告组编号": "12"})
+
+# 负向：活动编号重复
+_dup = pd.concat(
+    [_frame("Campaign", {"广告活动编号": "c1"}), _frame("Campaign", {"广告活动编号": "c1"})],
+    ignore_index=True,
+)
+try:
+    _validate_output(_dup)
+    check("拦截重复的活动编号", False, "自检未拦截")
+except ValueError as exc:
+    check("拦截重复的活动编号", True, f"已拦截：{str(exc).splitlines()[-1][:56]}")
+
+# 负向：子行引用了本表不存在的活动编号
+try:
+    _validate_output(_frame("Product Targeting", {"广告活动编号": "c404"}))
+    check("拦截孤儿活动编号引用", False, "自检未拦截")
+except ValueError as exc:
+    check("拦截孤儿活动编号引用", True, f"已拦截：{str(exc).splitlines()[-1][:56]}")
+
+# 正向：纯数字父 SKU 端到端生成后，活动编号全部非数字且引用完整
+_num_products = [
+    {
+        "parent_sku": str(_s),
+        "product_name": "铁丝网围栏",
+        "assigned_budget": 100.0,
+        "children": [{"msku": f"{_s}-HUA238-{_s}", "asin": f"B0TEST{_s:05d}"}],
+    }
+    for _s in (12, 13, 15, 18, 19, 23, 25)
+]
+_num_df = pd.read_excel(
+    generate_bulk_excel(
+        _num_products,
+        {
+            "include_targeting": True,
+            "include_placement": False,
+            "default_bid": 25,
+            "bidding_strategy": "Fixed bid",
+        },
+    ),
+    sheet_name=SHEET_NAME,
+    dtype=object,
+)
+_num_ids = sorted({str(v) for v in _num_df["广告活动编号"].dropna()})
+check("数字父 SKU 生成非数字临时 ID", _num_ids == [f"c{s}" for s in (12, 13, 15, 18, 19, 23, 25)], str(_num_ids))
+check("数字父 SKU 不再产生纯数字编号", not any(v.isdigit() for v in _num_ids), str(_num_ids))
+check("7 个活动全部生成 7 组投放行", len(_num_df) == 7 * (1 + 1 + 1 + 4), f"{len(_num_df)} 行")
+
 print("\n" + "=" * 78)
 print(f"结果：PASS {OK}  FAIL {FAIL}")
 print("=" * 78)

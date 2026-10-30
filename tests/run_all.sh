@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键跑全部验收测试（v9）。
+# 一键跑全部验收测试（v10）。
 #   - test_1..3、test_5：纯 Python，直接运行
 #   - test_4：需要后端已在 http://127.0.0.1:8000 运行
 #   - test_6：需要 jsdom（受管 node 工作区）+ tests/_vendor/vue.global.prod.js
@@ -38,7 +38,7 @@ run_py () {
 }
 
 echo "==================================================================="
-echo " Amazon Bulk Ads Generator · 全量验收测试 (v9)"
+echo " Amazon Bulk Ads Generator · 全量验收测试 (v10)"
 echo "==================================================================="
 
 for f in tests/test_1_noun_matching.py tests/test_2_end_to_end.py \

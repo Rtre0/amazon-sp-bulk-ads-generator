@@ -7,7 +7,7 @@
   <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi\&logoColor=white">  
   <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">  
   <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">  
-  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-254%20assertions-success">  
+  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-264%20assertions-success">  
 </p>
 
 ---
@@ -69,7 +69,7 @@ amazon-bulk-ads-generator/
 │   └── example_import_nouns.json                  # 词库导入格式示例
 ├── tools/
 │   └── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
-└── tests/                      # 6 个验收脚本，254 条断言
+└── tests/                      # 6 个验收脚本，264 条断言
 ```
 
 ### 2.3 核心机制
@@ -272,7 +272,20 @@ python main.py
 
 <details>
 
-<summary><b>Q3. 表头识别不出来 / 品名全是「商品」？</b></summary>
+<summary><b>Q3. 报「身份证无效 / 此Create操作要求您指定临时"广告活动编号"（任何非数字文本）」？</b></summary>
+
+亚马逊规定：`Create` 操作的实体编号必须是**临时 ID**，即**任何非数字文本**。  
+纯数字（例如父 SKU 恰好是 `12`、`15`）会被当成**已存在的真实活动 ID**，于是 Create 被拒、**整表回滚**。
+
+v10 已修复：生成器会自动把纯数字父 SKU 加 `c` 前缀（`12` → `c12`），并保证同一张表内活动 ID 唯一；`_validate_output()` 会在本地就拦下纯数字 ID、重复 ID 和孤儿引用。
+
+若你手工改过表格的「广告活动编号」列，请确保它**不是纯数字**，且 Campaign / Ad Group / Product Ad / Product Targeting 四类行用的是同一个值。
+
+</details>
+
+<details>
+
+<summary><b>Q4. 表头识别不出来 / 品名全是「商品」？</b></summary>
 
 分两种情况：
 
@@ -283,7 +296,7 @@ python main.py
 
 <details>
 
-<summary><b>Q4. <code>pip install</code> 依赖冲突 / 装不上？</b></summary>
+<summary><b>Q5. <code>pip install</code> 依赖冲突 / 装不上？</b></summary>
 
 ```bash
 # 强烈建议用独立虚拟环境，避免污染全局 Python
@@ -306,7 +319,7 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 <details>
 
-<summary><b>Q5. 端口 8000 被占用怎么办？</b></summary>
+<summary><b>Q6. 端口 8000 被占用怎么办？</b></summary>
 
 打开 `main.py`，修改文件末尾：
 
@@ -318,7 +331,7 @@ host, port = "127.0.0.1", 8000     # ← 把 8000 改成其它端口，如 8010
 
 <details>
 
-<summary><b>Q6. 生成的表格行数比预期少？</b></summary>
+<summary><b>Q7. 生成的表格行数比预期少？</b></summary>
 
 检查「搜索顶部 / 商品页面溢价 (%)」是否填了 `0`。
 
@@ -328,7 +341,7 @@ host, port = "127.0.0.1", 8000     # ← 把 8000 改成其它端口，如 8010
 
 <details>
 
-<summary><b>Q7. 上传后报告里有大量「由于其他行的错误，该行未得到处理」？</b></summary>
+<summary><b>Q8. 上传后报告里有大量「由于其他行的错误，该行未得到处理」？</b></summary>
 
 这是**级联警告，不是真实错误**。亚马逊只要有少数行报错，其余行就会显示「未得到处理」。
 
@@ -338,7 +351,7 @@ host, port = "127.0.0.1", 8000     # ← 把 8000 改成其它端口，如 8010
 
 <details>
 
-<summary><b>Q8. 想批量试传，但全量文件太大？</b></summary>
+<summary><b>Q9. 想批量试传，但全量文件太大？</b></summary>
 
 用 `tools/rebuild_from_report.py` 可以从亚马逊回传的报错报告反向重建商品集合并重出表格：
 
@@ -403,7 +416,7 @@ bash tests/run_all.sh
 | `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约、真实数据端到端 |  
 | `test_6_frontend_refresh.js` | 前端「刷新品名匹配」交互（jsdom + 真实 Vue 运行时） |
 
-合计 **254 条断言**。
+合计 **264 条断言**。
 
 ---
 

@@ -1,9 +1,20 @@
-"""Amazon Bulk Operations Ads Generator —— FastAPI 主入口（纯离线名词词库版 v9）。
+"""Amazon Bulk Operations Ads Generator —— FastAPI 主入口（纯离线名词词库版 v10）。
 
 一键运行：``python main.py``
 启动后自动在浏览器打开 http://127.0.0.1:8000
 
-v9 修复（关键）：
+v10 修复（关键）：
+- **临时 ID 不再直接用父 SKU**。亚马逊 Bulksheet 2.0 规定 ``Create`` 的实体
+  编号必须是「临时 ID」= 任何非数字文本；纯数字会被当成已存在的真实活动 ID，
+  报 ``身份证无效 / 此Create操作要求您指定临时"广告活动编号"（任何非数字文本）``，
+  整表回滚。v9 生成的 819 行里恰好有 7 个父 SKU 是纯数字（``12`` ``13`` …），
+  于是这 7 个活动报错、其余 812 行被级联标记「未处理」。
+- 新增 ``_temp_id()`` / ``_plan_temp_ids()``：纯数字加 ``c`` 前缀
+  （``12`` -> ``c12``），并保证同一张表内活动 ID 唯一。
+- ``_validate_output()`` 增加三项断言：临时 ID 非纯数字、Campaign 编号唯一、
+  子行引用的活动编号必须在本表内被定义。
+
+v9 修复：
 - **表头与亚马逊官方模板逐字对齐**（31 列）。此前把自动投放表达式写进了
   自造表头 ``商品投放表达式``，亚马逊不认识该列 -> 整列被忽略 ->
   报 ``用户输入无效 / 以下列缺少值：拓展商品投放编号``（5164 行）。
@@ -45,7 +56,7 @@ from core.translator import noun_matcher
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-app = FastAPI(title="Amazon Bulk Ads Generator - Offline Noun Dict", version="9.0.0")
+app = FastAPI(title="Amazon Bulk Ads Generator - Offline Noun Dict", version="10.0.0")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -87,7 +98,7 @@ def read_root():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "engine": "offline-noun-dict", "version": "9.0.0"}
+    return {"status": "ok", "engine": "offline-noun-dict", "version": "10.0.0"}
 
 
 # ---------------------------------------------------------------------------

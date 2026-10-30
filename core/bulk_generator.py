@@ -11,6 +11,27 @@
 中「商品推广活动」工作表的 31 列（列名、顺序完全一致），末尾额外追加一列
 ``ASIN`` 便于人工复核（亚马逊按表头精确匹配列，未知列会被忽略）。
 
+⚠️ v10 修复（关键）
+--------------------------------------------------------------------
+v9 修复后第三次上传，819 行 / 成功 0 行：
+
+    7 行 Campaign -> ``输入错误 / 身份证无效``
+                     ``此Create操作要求您指定临时"广告活动编号"（任何非数字文本）``
+    812 行（Ad Group / Product Ad / Product Targeting）
+          -> ``警告 / 未处理``（级联，非自身错误）
+
+根因：**``campaign_id = parent_sku`` 没有做「非数字」校验**。亚马逊 Bulksheet
+2.0 规定 ``Create`` 操作的实体编号必须是**临时 ID**，即「任何非数字文本」；
+纯数字会被当成**已存在的真实活动 ID**，于是 Create 被拒、整表回滚。
+
+该店铺有 7 个父 SKU 本身就是纯数字（``12`` ``13`` ``15`` ``18`` ``19``
+``23`` ``25``），临时 ID 于是变成纯数字；同批另外 56 个活动是
+``hua12`` / ``wyy005`` 这类字母数字混合，天然合规，所以只有那 7 个报错。
+
+修复：新增 ``_temp_id()``，把任意业务编号规整成非数字文本（纯数字加 ``c``
+前缀，``12`` -> ``c12``），并保证同一张表内临时 ID 唯一；``_validate_output()``
+新增「临时 ID 非纯数字 / Campaign 编号唯一 / 引用完整性」三项断言。
+
 ⚠️ v9 修复（关键）
 --------------------------------------------------------------------
 v8 修复后第二次上传，19844 行 / 成功 0 行：
@@ -60,7 +81,8 @@ from __future__ import annotations
 
 import datetime
 import io
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
@@ -156,6 +178,54 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# ---------------------------------------------------------------------------
+# 临时 ID（v10 关键）
+#   亚马逊 Bulksheet 2.0：``Create`` 操作的实体编号必须是「临时 ID」，
+#   即**任何非数字文本**。纯数字会被当成已存在的真实实体 ID，报
+#   ``此Create操作要求您指定临时"广告活动编号"（任何非数字文本）``。
+# ---------------------------------------------------------------------------
+_NUMERIC_ONLY_RE = re.compile(r"^[0-9]+$")
+_TEMP_ID_PREFIX = "c"
+
+
+def _temp_id(raw: Any, seq: int = 0) -> str:
+    """把任意业务编号规整为亚马逊可接受的「临时 ID」。
+
+    - 纯数字（父 SKU ``12``）-> 加前缀 ``c12``
+    - 空值 -> ``row{seq}`` 兜底，避免生成空编号
+    - 其余原样保留（``hua12`` / ``wyy005`` 等本就合规，行为不变）
+    """
+    text = "" if raw is None else str(raw).strip()
+    if not text:
+        return f"row{seq}"
+    if _NUMERIC_ONLY_RE.match(text):
+        return f"{_TEMP_ID_PREFIX}{text}"
+    return text
+
+
+def _plan_temp_ids(products: List[Dict[str, Any]]) -> Dict[str, Tuple[str, str]]:
+    """预生成「父 SKU -> (活动临时 ID, 广告组临时 ID)」映射，保证表内唯一。
+
+    唯一性不是理论问题：父 SKU ``12`` 加前缀得到 ``c12``，若另一父 SKU 恰好
+    就叫 ``c12``，两者会撞车，亚马逊会认为是同一个活动。
+    """
+    plan: Dict[str, Tuple[str, str]] = {}
+    used: set = set()
+    for seq, item in enumerate(products, 1):
+        key = str(item.get("parent_sku", "") or "")
+        if key in plan:
+            continue
+        base = _temp_id(key, seq)
+        campaign_id = base
+        n = 1
+        while campaign_id in used:
+            n += 1
+            campaign_id = f"{base}_{n}"
+        used.add(campaign_id)
+        plan[key] = (campaign_id, f"{campaign_id}_ag")
+    return plan
+
+
 def generate_bulk_excel(
     products: List[Dict[str, Any]], settings: Dict[str, Any]
 ) -> io.BytesIO:
@@ -191,6 +261,9 @@ def generate_bulk_excel(
     except ValueError:
         start_date = today_str
 
+    # 临时 ID 预规划（v10）：保证非纯数字 + 表内唯一，与父 SKU 解耦
+    id_plan = _plan_temp_ids(products)
+
     for item in products:
         parent_sku = item["parent_sku"]
         prod_name = item.get("product_name", "商品") or "商品"
@@ -205,9 +278,10 @@ def generate_bulk_excel(
         if not children:
             continue
 
-        campaign_id = parent_sku
+        # ⚠️ v10：不能直接用 parent_sku 当临时 ID（纯数字父 SKU 会被亚马逊
+        #    当成真实活动 ID，报「身份证无效」并整表回滚）
+        campaign_id, ad_group_id = id_plan[str(parent_sku or "")]
         campaign_name = f"{parent_sku}_{prod_name}_自动_{today_str}"
-        ad_group_id = f"{parent_sku}_ag"
         ad_group_name = campaign_name
 
         # 1. Campaign
@@ -317,12 +391,14 @@ def generate_bulk_excel(
 def _validate_output(df: "pd.DataFrame") -> None:
     """上传前自检：把亚马逊会拒绝的字段值挡在本地。
 
-    覆盖四类高频上传失败：
+    覆盖五类高频上传失败：
     1. 表头与官方模板不一致（列名漂移，例如把 ``拓展商品投放编号`` 写成
        ``商品投放表达式``）——v9 事故的直接原因；
     2. 实体层级不在 ``VALID_ENTITIES`` 内——v8 事故的直接原因；
     3. 自动投放表达式缺失、写错或写成了 ``targeting_expression = "..."``；
-    4. 广告位 / 投放类型 / 百分比用了非受控值。
+    4. 广告位 / 投放类型 / 百分比用了非受控值；
+    5. 临时 ID 为纯数字、Campaign 编号重复、子行引用了未定义的活动编号
+       ——v10 事故的直接原因。
     """
     problems: List[str] = []
 
@@ -409,5 +485,53 @@ def _validate_output(df: "pd.DataFrame") -> None:
                 f"非法投放类型：{bad_tt}（应为 {TARGETING_TYPE_AUTO} 或 {TARGETING_TYPE_MANUAL}）"
             )
 
+    # 5) 临时 ID：必须非纯数字、Campaign 编号唯一、引用完整（v10 事故回归）
+    problems.extend(_check_temp_ids(df))
+
     if problems:
         raise ValueError("生成的 Bulk 表格未通过亚马逊规范自检：\n  - " + "\n  - ".join(problems))
+
+
+def _check_temp_ids(df: "pd.DataFrame") -> List[str]:
+    """校验 Create 操作的临时 ID 是否合规。
+
+    亚马逊规则：``Create`` 的实体编号必须是**非数字文本**的临时 ID。
+    纯数字会被当成已存在的真实实体 ID，报 ``身份证无效``，导致整表回滚。
+    """
+    problems: List[str] = []
+    entity = df["实体层级"]  # 调用方已保证该列存在
+
+    def _clean(series: "pd.Series") -> "pd.Series":
+        return series.dropna().astype(str).str.strip()
+
+    for column, label in (("广告活动编号", "广告活动"), ("广告组编号", "广告组")):
+        if column not in df.columns:
+            continue
+        values = _clean(df[column])
+        numeric = sorted({v for v in values if _NUMERIC_ONLY_RE.match(v)})
+        if numeric:
+            problems.append(
+                f"「{column}」出现纯数字临时 ID {numeric[:5]}"
+                "（Create 要求非数字文本，否则报「身份证无效」）"
+            )
+
+    if "广告活动编号" in df.columns:
+        campaign_ids = _clean(df.loc[entity == "Campaign", "广告活动编号"])
+        dup = sorted({v for v in campaign_ids if int((campaign_ids == v).sum()) > 1})
+        if dup:
+            problems.append(f"Campaign 行的「广告活动编号」重复：{dup[:5]}")
+
+        # 引用完整性：子行引用的活动编号必须在本表内有对应的 Campaign 行
+        defined = set(campaign_ids)
+        referenced = set(_clean(df["广告活动编号"])) - {""}
+        orphan = sorted(referenced - defined)
+        if orphan:
+            problems.append(f"引用了未定义的「广告活动编号」：{orphan[:5]}")
+
+    if "广告组编号" in df.columns:
+        ad_group_ids = _clean(df.loc[entity == "Ad Group", "广告组编号"])
+        dup_ag = sorted({v for v in ad_group_ids if int((ad_group_ids == v).sum()) > 1})
+        if dup_ag:
+            problems.append(f"Ad Group 行的「广告组编号」重复：{dup_ag[:5]}")
+
+    return problems
