@@ -448,30 +448,100 @@
             <input type="number" min="0" v-model.number="mtDailyBudget" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
         </div>
+
+        <!-- 竞价批量应用条 -->
+        <div class="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2.5">
+          <div class="text-xs font-semibold text-slate-700 pb-1.5 mr-1">⚡ 竞价批量应用</div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-500 mb-1">出单价基准</label>
+            <select v-model="mtBidBase" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="cpc">原始 CPC（花费/点击）</option>
+              <option value="suggested">建议竞价</option>
+              <option value="fixed">固定金额</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-500 mb-1">倍数</label>
+            <input type="number" min="0" step="0.1" v-model.number="mtBidFactor"
+                   class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <button @click="applyBidFactor" :disabled="!mtSelected.length"
+                  class="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors"
+                  :title="'把勾选行的竞价设为 基准 × ' + mtBidFactor">
+            × {{ mtBidFactor }} 应用到勾选项
+          </button>
+          <button @click="applyFixedBid" :disabled="!mtSelected.length"
+                  class="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+                  :title="'把所有勾选行的竞价统一设为上方「关键词竞价」框里的金额 ' + mtBid + ' JPY'">
+            统一填入 {{ mtBid }} JPY
+          </button>
+          <span class="text-[11px] text-slate-400 pb-1.5">
+            基准为空/为 0 时回退到 {{ mtBid }} JPY；行数内「建议竞价」列仍可继续单独微调。
+          </span>
+        </div>
       </section>
 
       <!-- 搜索词表 -->
       <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-          <div class="text-xs text-slate-500">
-            共 <strong class="text-slate-800">{{ mtTotal }}</strong> 条匹配 ·
-            已勾选 <strong class="text-blue-600">{{ mtSelected.length }}</strong> 个关键词
-            <span v-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
+        <div class="px-4 py-3 border-b border-slate-100">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="text-xs text-slate-500">
+              共 <strong class="text-slate-800">{{ mtTotal }}</strong> 条匹配 ·
+              已勾选 <strong class="text-blue-600">{{ mtSelected.length }}</strong> 个关键词
+              <span v-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="toggleSelectAllTerms" :disabled="!mtRows.length"
+                      class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
+                {{ mtAllSelected ? '取消全选' : '全选当前结果' }}
+              </button>
+              <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetSku || mtExporting"
+                      class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+                {{ mtExporting ? '生成中…' : '导出手动广告 Bulk' }}
+              </button>
+              <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetSku || mtCreating"
+                      class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
+                      title="直接推送到赛狐后台创建广告活动">
+                {{ mtCreating ? '创建中…' : '⚡ 接口直推创建' }}
+              </button>
+            </div>
           </div>
-          <div class="flex items-center gap-2">
-            <button @click="toggleSelectAllTerms" :disabled="!mtRows.length"
-                    class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
-              {{ mtAllSelected ? '取消全选' : '全选当前结果' }}
+
+          <!-- 广告活动命名 -->
+          <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2.5">
+            <div class="min-w-[300px] flex-[2]">
+              <label class="block text-[11px] font-semibold text-slate-600 mb-1">
+                广告活动名称
+                <span class="font-normal text-slate-400">（来源活动自动去掉末尾时间戳；可用占位符 &#123;来源活动&#125; &#123;搜索词&#125; &#123;匹配类型&#125; &#123;父SKU&#125;）</span>
+              </label>
+              <input v-model="mtNameTemplate" placeholder="{来源活动}_手动_{搜索词}_{匹配类型}"
+                     class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-600 mb-1">命名方式</label>
+              <select v-model="mtNameMode" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="per_keyword">每个搜索词一个活动</option>
+                <option value="single">合并为一个活动</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-600 mb-1">匹配类型后缀</label>
+              <select v-model="mtNameMatchMode" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="new">新投放（精准/词组/广泛）</option>
+                <option value="source">来源（close_match 等）</option>
+                <option value="none">不加后缀</option>
+              </select>
+            </div>
+            <button @click="resetNameTemplate"
+                    class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+                    title="恢复为「来源活动_手动_搜索词_匹配类型」">
+              🔄 按来源活动生成
             </button>
-            <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetSku || mtExporting"
-                    class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
-              {{ mtExporting ? '生成中…' : '导出手动广告 Bulk' }}
-            </button>
-            <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetSku || mtCreating"
-                    class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
-                    title="直接推送到赛狐后台创建广告活动">
-              {{ mtCreating ? '创建中…' : '⚡ 接口直推创建' }}
-            </button>
+          </div>
+          <div v-if="mtNamePreview.length" class="mt-2 px-2.5 py-1.5 bg-slate-50 rounded text-[11px] text-slate-500">
+            <span class="font-semibold text-slate-600">活动名预览：</span>
+            <span v-for="(n, i) in mtNamePreview" :key="i" class="mr-3 font-mono text-slate-700">{{ n }}</span>
+            <span v-if="mtNameMode === 'per_keyword' && mtSelected.length > mtNamePreview.length" class="text-slate-400">… 共 {{ mtSelected.length }} 个活动</span>
           </div>
         </div>
 
@@ -490,6 +560,7 @@
                 <th class="p-3 text-right">出单</th>
                 <th class="p-3 text-right">销售额</th>
                 <th class="p-3 text-right">ACOS</th>
+                <th class="p-3 text-right" title="该搜索词在来源活动里的实际点击成本，作为倍数竞价的基准">原始 CPC</th>
                 <th class="p-3 text-right">建议竞价</th>
                 <th class="p-3">来源活动</th>
               </tr>
@@ -514,6 +585,7 @@
                     {{ r.acos ? (Number(r.acos) * 100).toFixed(1) + '%' : '-' }}
                   </span>
                 </td>
+                <td class="p-3 text-right text-slate-500">{{ Number(r.cpc) > 0 ? Number(r.cpc).toFixed(1) : '-' }}</td>
                 <td class="p-3 text-right">
                   <input type="number" min="0" v-model.number="r.bid" :placeholder="String(mtBid)"
                          class="w-20 border border-slate-300 rounded px-1.5 py-1 text-right text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -521,7 +593,7 @@
                 <td class="p-3 text-slate-400 truncate max-w-[180px]" :title="r.campaign_name">{{ r.campaign_name }}</td>
               </tr>
               <tr v-if="!mtRows.length">
-                <td colspan="11" class="p-10 text-center text-slate-400">
+                <td colspan="12" class="p-10 text-center text-slate-400">
                   {{ mtLoading ? '查询中…' : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取' }}
                 </td>
               </tr>
@@ -530,7 +602,8 @@
         </div>
         <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
           行内「建议竞价」列可单独改每个关键词的竞价，留空则使用上方统一的
-          <strong class="text-slate-700">{{ mtBid }}</strong> JPY。
+          <strong class="text-slate-700">{{ mtBid }}</strong> JPY；「原始 CPC」列是倍数竞价的基准。
+          活动名按上方模板生成，来源活动末尾的时间戳（如 <span class="font-mono">-20260801 10:21:16.51</span>）会自动去掉。
           生成结构：Campaign（手动）→ Ad Group → Product Ad（每子体一行）→ Keyword（每关键词一行）。
         </div>
       </section>
@@ -1439,10 +1512,97 @@
         const mtDailyBudget = ref(100);
         const mtExporting = ref(false);
         const mtCreating = ref(false);
+        // 竞价批量应用
+        const mtBidBase = ref('cpc');       // cpc | suggested | fixed
+        const mtBidFactor = ref(1.4);
+        // 广告活动命名
+        const DEFAULT_NAME_TPL = '{来源活动}_手动_{搜索词}_{匹配类型}';
+        const mtNameTemplate = ref(DEFAULT_NAME_TPL);
+        const mtNameMode = ref('per_keyword'); // per_keyword | single
+        const mtNameMatchMode = ref('new');    // new | source | none
+        const MATCH_TYPE_LABEL = { exact: '精准匹配', phrase: '词组匹配', broad: '广泛匹配' };
 
         const mtSelected = computed(() => mtRows.value.filter(r => r.selected));
         const mtAllSelected = computed(() =>
           mtRows.value.length > 0 && mtRows.value.every(r => r.selected));
+
+        /* ---- 来源活动名清洗：去掉末尾时间戳 ---- */
+        const cleanSourceCampaignName = (raw) => {
+          let s = String(raw || '').trim();
+          if (!s) return '手动拓词';
+          // 第一个 8 位日期（20260801）之后都是时间戳 / 序号 / 「复制 N」，全部截掉
+          const m = s.match(/\d{8}/);
+          if (m) s = s.slice(0, m.index);
+          s = s.replace(/[\s\-_、,，.。:：]+$/g, '').trim();
+          s = s.replace(/\s{2,}/g, ' ').trim();
+          return s || '手动拓词';
+        };
+
+        const mtMatchSuffix = (r) => {
+          if (mtNameMatchMode.value === 'none') return '';
+          if (mtNameMatchMode.value === 'source') return (r && r.match_type) || '';
+          return MATCH_TYPE_LABEL[mtMatchType.value] || '精准匹配';
+        };
+
+        const renderCampaignName = (r, opts = {}) => {
+          const base = cleanSourceCampaignName(r && r.campaign_name);
+          const kw = (r && r.search_term) || '搜索词拓词';
+          const tpl = (mtNameTemplate.value || '').trim() || DEFAULT_NAME_TPL;
+          let name = tpl
+            .replace(/\{来源活动\}/g, base)
+            .replace(/\{搜索词\}/g, opts.single ? '搜索词拓词' : kw)
+            .replace(/\{匹配类型\}/g, mtMatchSuffix(r))
+            .replace(/\{父SKU\}/g, mtTargetSku.value || '');
+          // 后缀为空 / 无占位符模板时，清掉尾部多余的分隔符
+          name = name.replace(/_{2,}/g, '_').replace(/[\s_\-]+$/g, '').trim();
+          return name || `${base}_手动_${kw}`;
+        };
+
+        const mtNamePreview = computed(() => {
+          const rows = mtSelected.value;
+          if (!rows.length) return [];
+          if (mtNameMode.value === 'single') {
+            return [renderCampaignName(rows[0], { single: true })];
+          }
+          return rows.slice(0, 3).map(r => renderCampaignName(r));
+        });
+
+        const resetNameTemplate = () => {
+          mtNameTemplate.value = DEFAULT_NAME_TPL;
+          mtNameMatchMode.value = 'new';
+          showToast('已恢复「来源活动_手动_搜索词_匹配类型」命名');
+        };
+
+        /* ---- 竞价批量应用 ---- */
+        const bidBaseOf = (r) => {
+          if (mtBidBase.value === 'suggested') return Number(r.suggested_bid) || 0;
+          if (mtBidBase.value === 'fixed') return Number(mtBid.value) || 0;
+          return Number(r.cpc) || 0;
+        };
+
+        const applyBidFactor = () => {
+          const f = Number(mtBidFactor.value);
+          if (!f || f <= 0) { showToast('倍数必须大于 0'); return; }
+          const rows = mtSelected.value;
+          if (!rows.length) { showToast('请先勾选搜索词'); return; }
+          let fallback = 0;
+          rows.forEach(r => {
+            const base = bidBaseOf(r);
+            if (base <= 0) fallback++;
+            r.bid = Math.round((base > 0 ? base * f : (Number(mtBid.value) || 15)) * 100) / 100;
+          });
+          showToast(`已按 ×${f} 应用到 ${rows.length} 个关键词` +
+                    (fallback ? `（${fallback} 条无基准，回退 ${mtBid.value} JPY）` : ''));
+        };
+
+        const applyFixedBid = () => {
+          const v = Number(mtBid.value) || 0;
+          if (v <= 0) { showToast('请先填写关键词竞价 (JPY)'); return; }
+          const rows = mtSelected.value;
+          if (!rows.length) { showToast('请先勾选搜索词'); return; }
+          rows.forEach(r => { r.bid = v; });
+          showToast(`已把 ${rows.length} 个关键词统一设为 ${v} JPY`);
+        };
 
         const toggleSelectAllTerms = () => {
           const target = !mtAllSelected.value;
@@ -1498,20 +1658,42 @@
         const buildManualCampaigns = () => {
           const p = mtProducts.value.find(x => x.parent_sku === mtTargetSku.value);
           if (!p) return [];
-          const kws = mtSelected.value.map(r => ({
+          const selected = mtSelected.value;
+          if (!selected.length) return [];
+          const children = (p.children || []).map(c => ({ msku: c.msku, asin: c.asin }));
+          const kwOf = (r) => ({
             keyword_text: r.search_term,
             match_type: mtMatchType.value,
             bid: Number(r.bid) || Number(mtBid.value) || 15
-          }));
-          if (!kws.length) return [];
-          return [{
+          });
+          const common = {
             parent_sku: p.parent_sku,
             product_name: p.product_name,
-            children: (p.children || []).map(c => ({ msku: c.msku, asin: c.asin })),
-            keywords: kws,
+            children,
+            products: children,
             daily_budget: Number(mtDailyBudget.value) || 100,
             default_bid: Number(mtDefaultBid.value) || 25
-          }];
+          };
+          // 合并为一个活动：所有勾选的搜索词进同一活动
+          if (mtNameMode.value === 'single') {
+            const cname = renderCampaignName(selected[0], { single: true });
+            return [{
+              ...common,
+              campaign_name: cname,
+              group_name: cname,
+              keywords: selected.map(kwOf)
+            }];
+          }
+          // 默认：每个搜索词一个独立活动，名称 = 来源活动_手动_搜索词_匹配类型
+          return selected.map(r => {
+            const cname = renderCampaignName(r);
+            return {
+              ...common,
+              campaign_name: cname,
+              group_name: cname,
+              keywords: [kwOf(r)]
+            };
+          });
         };
 
         const exportManualBulk = async () => {
@@ -1538,7 +1720,7 @@
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
-            showToast(`已导出手动广告 Bulk（${mtSelected.value.length} 个关键词）`);
+            showToast(`已导出手动广告 Bulk（${campaigns.length} 个活动 / ${mtSelected.value.length} 个关键词）`);
           } catch (e) {
             showToast('导出失败：' + (e.message || '网络异常'));
           } finally {
@@ -1561,7 +1743,7 @@
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(d.detail || '创建失败'); return; }
-            showToast('接口直推完成：' + (d.message || '已提交赛狐后台'));
+            showToast(`接口直推已提交 ${campaigns.length} 个活动，请到赛狐后台确认`);
           } catch (e) {
             showToast('创建失败：' + (e.message || '网络异常'));
           } finally {
@@ -1689,6 +1871,8 @@
           mtShopId, mtStartDate, mtEndDate, mtKeyword, mtOnlyOrders, mtRows, mtTotal,
           mtLoading, mtSyncing, mtProducts, mtTargetSku, mtMatchType, mtBid, mtDefaultBid,
           mtDailyBudget, mtExporting, mtCreating, mtSelected, mtAllSelected,
+          mtBidBase, mtBidFactor, applyBidFactor, applyFixedBid,
+          mtNameTemplate, mtNameMode, mtNameMatchMode, mtNamePreview, resetNameTemplate,
           toggleSelectAllTerms, loadSearchTerms, exportManualBulk, createManualViaApi,
           /* 定时任务 */
           schedStatus, schedBusy, schedMsg, loadSchedStatus, toggleScheduler, saveSchedConfig, runJobNow

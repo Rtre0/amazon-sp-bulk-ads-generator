@@ -455,20 +455,41 @@ def create_manual_via_api(req: ManualAdCreateRequest):
         )
 
     results = []
-    for campaign in req.campaigns:
+    for seq, campaign in enumerate(req.campaigns, 1):
         try:
+            # 前端字段（keyword_text / match_type）→ 赛狐接口字段（keywordText / matchType）
+            keywords = [
+                {
+                    "keywordText": kw.get("keywordText") or kw.get("keyword_text", ""),
+                    "matchType": kw.get("matchType") or kw.get("match_type", "exact"),
+                    "bid": str(kw.get("bid", 15)),
+                }
+                for kw in (campaign.get("keywords", []) or [])
+            ]
+            raw_products = campaign.get("products")
+            if raw_products is None:
+                raw_products = campaign.get("children", []) or []
+            products = [
+                {
+                    "sku": p.get("sku") or p.get("msku", ""),
+                    "asin": p.get("asin", ""),
+                }
+                for p in raw_products
+            ]
+            cname = campaign.get("campaign_name", "") or \
+                f"{campaign.get('parent_sku', '')}_手动_{seq}"
             payload = sf.build_manual_ad_payload(
                 shop_id=req.shop_id,
-                campaign_name=campaign.get("campaign_name", ""),
-                group_name=campaign.get("group_name", campaign.get("campaign_name", "")),
+                campaign_name=cname,
+                group_name=campaign.get("group_name") or cname,
                 daily_budget=str(campaign.get("daily_budget", 100)),
                 start_date=campaign.get("start_date", ""),
                 end_date=campaign.get("end_date", ""),
                 portfolio_id=campaign.get("portfolio_id", ""),
                 strategy=campaign.get("strategy", "legacyForSales"),
                 default_bid=str(campaign.get("default_bid", 25)),
-                keywords=campaign.get("keywords", []),
-                products=campaign.get("products", []),
+                keywords=keywords,
+                products=products,
                 placement_top=campaign.get("placement_top"),
                 placement_product_page=campaign.get("placement_product_page"),
                 placement_rest_of_search=campaign.get("placement_rest_of_search"),
@@ -476,12 +497,12 @@ def create_manual_via_api(req: ManualAdCreateRequest):
             resp = sf.create_sp_ad(payload)
             check = sf.check_create_result(resp)
             results.append({
-                "campaign_name": campaign.get("campaign_name", ""),
+                "campaign_name": cname,
                 **check,
             })
         except Exception as exc:
             results.append({
-                "campaign_name": campaign.get("campaign_name", ""),
+                "campaign_name": cname,
                 "success": False,
                 "errors": [str(exc)],
             })

@@ -578,6 +578,10 @@ def generate_manual_keyword_bulk(
             {
                 "parent_sku": "ff061",
                 "product_name": "陈列架",
+                # 可选：自定义活动名，如「HL155 漏斗_手动_じょうご 広口_精准匹配」
+                # 不传则沿用 f"{parent_sku}_{product_name}_手动_{日期}"
+                "campaign_name": "HL155 漏斗_手动_じょうご 広口_精准匹配",
+                "group_name": "",  # 可选，留空则与活动名一致
                 "children": [{"msku": "...", "asin": "..."}],
                 "keywords": [
                     {"keyword_text": "dog cage", "match_type": "exact", "bid": 15.0},
@@ -586,6 +590,9 @@ def generate_manual_keyword_bulk(
                 "daily_budget": 100.0,
                 "default_bid": 25.0,
             }
+
+        支持多个 campaign 共用同一个 parent_sku（每词独立活动），
+        每个活动会分配独立的临时编号。
 
         settings: 全局配置（bidding_strategy, portfolio_id, start_date 等）。
     """
@@ -601,10 +608,26 @@ def generate_manual_keyword_bulk(
     except ValueError:
         start_date = today_str
 
-    # 临时 ID 预规划
-    id_plan = _plan_temp_ids(campaigns)
+    # 临时 ID 预规划。
+    # 注意：这里不能用 _plan_temp_ids()——它以 parent_sku 为键去重，
+    # 而手动拓词支持「同一个父体、每个搜索词一个独立活动」，
+    # 用它会让多个活动共用一个编号，导致亚马逊把它们合并成一个活动。
+    id_plan: List[Tuple[str, str]] = []
+    used_ids: set = set()
+    for seq, item in enumerate(campaigns, 1):
+        base = _temp_id(item.get("parent_sku", ""), seq)
+        campaign_id = base
+        n = 1
+        while campaign_id in used_ids:
+            n += 1
+            campaign_id = f"{base}_{n}"
+        used_ids.add(campaign_id)
+        id_plan.append((campaign_id, f"{campaign_id}_ag"))
 
-    for item in campaigns:
+    # 活动名去重（Amazon 不允许同一账号下重名活动）
+    used_names: Dict[str, int] = {}
+
+    for idx, item in enumerate(campaigns):
         parent_sku = item.get("parent_sku", "")
         prod_name = item.get("product_name", "商品") or "商品"
         budget = _to_float(
@@ -615,9 +638,15 @@ def generate_manual_keyword_bulk(
         if not children or not keywords:
             continue
 
-        campaign_id, ad_group_id = id_plan[str(parent_sku or "")]
-        campaign_name = f"{parent_sku}_{prod_name}_手动_{today_str}"
-        ad_group_name = campaign_name
+        campaign_id, ad_group_id = id_plan[idx]
+        # 前端可自定义活动名（如「来源活动_手动_搜索词_匹配类型」）；
+        # 未传时保持 v2.0 原有兜底，行为不变。
+        campaign_name = str(item.get("campaign_name") or "").strip() or \
+            f"{parent_sku}_{prod_name}_手动_{today_str}"
+        used_names[campaign_name] = used_names.get(campaign_name, 0) + 1
+        if used_names[campaign_name] > 1:
+            campaign_name = f"{campaign_name}_{used_names[campaign_name]}"
+        ad_group_name = str(item.get("group_name") or "").strip() or campaign_name
         default_bid = _to_float(item.get("default_bid", 25.0), 25.0)
 
         # 1. Campaign（手动投放）
