@@ -552,28 +552,64 @@
         </h2>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <!-- 主推：手动粘贴，不需要调试模式 -->
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式一：从已登录的 Chrome 自动抓取（推荐）</label>
-            <p class="text-[11px] text-slate-400 leading-5 mb-2.5">
-              先双击项目根目录的 <span class="font-mono bg-slate-100 px-1 rounded">启动Chrome调试模式.bat</span>，
-              在弹出的 Chrome 里登录赛狐，再点下面的按钮。
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">
+              方式一：手动粘贴 Cookie
+              <span class="ml-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-normal">推荐 · 不用调试模式</span>
+            </label>
+            <ol class="text-[11px] text-slate-500 leading-5 mb-2.5 list-decimal pl-4">
+              <li>在<strong>已登录赛狐</strong>的浏览器里按 <kbd class="font-mono bg-slate-100 px-1 rounded">F12</kbd> → 「网络 / Network」→ 按 <kbd class="font-mono bg-slate-100 px-1 rounded">F5</kbd> 刷新</li>
+              <li>点开任意一条 <span class="font-mono">sellfox.com</span> 的请求 → 「标头 / Headers」→ 找到<strong>请求标头</strong>里的 <span class="font-mono">cookie</span> 行</li>
+              <li>在该行<strong>右键 → 复制值</strong>（或全选那串值 Ctrl+C），粘贴到下面 → 点「保存 Cookie」</li>
+            </ol>
+            <textarea v-model="cookieStr" rows="4" placeholder="sf_u=xxxxx; sf_help=xxxxx; ...&#10;也支持：整段请求标头 / Copy as cURL / document.cookie / JSON"
+                      class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            <div class="flex items-center gap-3 mt-2 flex-wrap">
+              <button @click="updateCookie" :disabled="!cookieStr.trim() || savingCookie"
+                      class="px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+                {{ savingCookie ? '保存中…' : '💾 保存 Cookie' }}
+              </button>
+              <label class="flex items-center gap-1 text-[11px] text-slate-500 cursor-pointer select-none">
+                <input type="checkbox" v-model="cookieMerge" class="accent-blue-600">
+                与现有 Cookie 合并（推荐）
+              </label>
+            </div>
+            <p v-if="cookieMsg" :class="['mt-2 text-xs', cookieOk ? 'text-emerald-600' : 'text-rose-600']">{{ cookieMsg }}</p>
+            <p class="mt-2 text-[11px] text-slate-400 leading-5">
+              找不到 cookie 行？也可以在「控制台 / Console」执行 <span class="font-mono bg-slate-100 px-1 rounded">copy(document.cookie)</span> 后粘贴；
+              但该方式拿不到 HttpOnly 的 Cookie，若保存后提示缺少 <span class="font-mono">sf_u</span>，请改用上面的「网络」方式。
             </p>
-            <button @click="grabCookie" :disabled="grabbing"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
-              {{ grabbing ? '抓取中…' : '🔗 从 Chrome 抓取 Cookie' }}
-            </button>
-            <p v-if="grabMsg" :class="['mt-2 text-xs', grabOk ? 'text-emerald-600' : 'text-rose-600']">{{ grabMsg }}</p>
           </div>
 
+          <!-- 可选：调试模式自动抓取，默认收起 -->
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式二：手动粘贴 Cookie 字符串</label>
-            <textarea v-model="cookieStr" rows="3" placeholder="从浏览器开发者工具复制 Cookie 请求头，例如：&#10;sf_xxx=abc; sf_yyy=def; ..."
-                      class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-            <button @click="updateCookie" :disabled="!cookieStr.trim() || savingCookie"
-                    class="mt-2 px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
-              {{ savingCookie ? '保存中…' : '保存 Cookie' }}
-            </button>
-            <p v-if="cookieMsg" :class="['mt-2 text-xs', cookieOk ? 'text-emerald-600' : 'text-rose-600']">{{ cookieMsg }}</p>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式二：Chrome 调试模式自动抓取（可选）</label>
+            <p class="text-[11px] text-slate-400 leading-5 mb-2.5">
+              不想手动复制时才用：需先双击项目根目录的
+              <span class="font-mono bg-slate-100 px-1 rounded">启动Chrome调试模式.bat</span>，
+              在弹出的 Chrome 里登录赛狐。
+            </p>
+            <details class="group">
+              <summary class="inline-block px-3.5 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-600 cursor-pointer hover:bg-slate-50 select-none">
+                ▸ 展开自动抓取（需要 9222 调试端口）
+              </summary>
+              <div class="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <button @click="grabCookie" :disabled="grabbing"
+                        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+                  {{ grabbing ? '抓取中…' : '🔗 从 Chrome 抓取 Cookie' }}
+                </button>
+                <p v-if="grabMsg" :class="['mt-2 text-xs', grabOk ? 'text-emerald-600' : 'text-rose-600']">{{ grabMsg }}</p>
+              </div>
+            </details>
+            <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-500 leading-5">
+              <div class="font-semibold text-slate-700 mb-1">当前登录态</div>
+              共 {{ cookieStatus.cookie_count }} 条 Cookie，
+              <span :class="cookieStatus.valid ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'">
+                {{ cookieStatus.valid ? '状态有效，可直接同步' : '未配置或已过期' }}
+              </span>。
+              Cookie 过期时（一般几天到几周），重复上面的方式一重新粘贴一次即可。
+            </div>
           </div>
         </div>
       </section>
@@ -1250,6 +1286,7 @@
         /* ============ Cookie 管理 ============ */
         const cookieStatus = ref({ valid: false, cookie_count: 0 });
         const cookieStr = ref('');
+        const cookieMerge = ref(true);
         const savingCookie = ref(false);
         const cookieMsg = ref('');
         const cookieOk = ref(false);
@@ -1273,11 +1310,18 @@
             const res = await fetch('/api/cookie/update', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ cookie_str: cookieStr.value })
+              body: JSON.stringify({ cookie_str: cookieStr.value, merge: cookieMerge.value })
             });
             const d = await res.json().catch(() => ({}));
             cookieOk.value = res.ok;
-            cookieMsg.value = res.ok ? `保存成功：共 ${d.cookie_count} 条 Cookie` : (d.detail || '保存失败');
+            if (res.ok) {
+              cookieMsg.value = d.has_login
+                ? `保存成功：解析 ${d.parsed} 条，当前共 ${d.cookie_count} 条，登录态 sf_u 已就绪 ✓`
+                : `已保存 ${d.parsed} 条（共 ${d.cookie_count} 条），但未检测到 sf_u 登录态；请改用「网络 → 请求标头」复制完整 cookie 值`;
+              cookieOk.value = !!d.has_login;
+            } else {
+              cookieMsg.value = d.detail || '保存失败';
+            }
             if (res.ok) { cookieStr.value = ''; await checkCookie(); }
           } catch (e) {
             cookieOk.value = false;
@@ -1637,7 +1681,7 @@
           dictOpen, dictSearch, dictEntries, dictStats, dictInput, newEntry, filteredDict,
           openDict, reloadDict, importDict, refreshDictCount, addDictEntry, saveDictEntry, deleteDictEntry,
           /* Cookie */
-          cookieStatus, cookieStr, savingCookie, cookieMsg, cookieOk, grabbing, grabMsg, grabOk,
+          cookieStatus, cookieStr, cookieMerge, savingCookie, cookieMsg, cookieOk, grabbing, grabMsg, grabOk,
           checkCookie, updateCookie, grabCookie,
           /* 店铺同步 */
           discovering, syncingShop, syncDays, syncMsg, discoverShops, syncProducts, syncSearchTerms,

@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -108,39 +109,110 @@ def save_cookies(cookies: Dict[str, str]) -> None:
         json.dump(cookies, f, ensure_ascii=False, indent=2)
 
 
-def update_cookies_from_dict(cookie_str: str) -> Dict[str, str]:
-    """从前端粘贴的 Cookie 字符串更新本地存储。
+# Cookie 属性名（不是真正的 cookie，解析时要丢弃）
+_COOKIE_ATTRS = {
+    "path", "expires", "max-age", "domain", "secure", "httponly",
+    "samesite", "priority", "partitioned", "version", "comment",
+}
+_KEY_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+# "Cookie: xxx" / "cookie: xxx"（Request Headers 里的行）
+_HEADER_RE = re.compile(r"^\s*cookie\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+# cURL: -H 'Cookie: xxx' / --cookie 'xxx' / -b "xxx"
+_CURL_H_RE = re.compile(
+    r"-H\s+['\"](?:Cookie|cookie)\s*:\s*([^'\"]+)['\"]", re.MULTILINE
+)
+_CURL_B_RE = re.compile(
+    r"(?:-b|--cookie)\s+['\"]([^'\"]+)['\"]", re.MULTILINE
+)
 
-    支持两种格式：
-    - 浏览器复制的 ``key=value; key2=value2`` 格式
-    - JSON 对象 ``{"key": "value"}``
+
+def parse_cookie_input(text: str) -> Dict[str, str]:
+    """把用户从浏览器粘贴的各种 Cookie 形态解析成 ``{name: value}``。
+
+    支持：
+    - 纯 Cookie 串 ``sf_u=xxx; sf_help=yyy``（DevTools 里「复制值」）
+    - 带前缀 ``Cookie: sf_u=xxx; ...``
+    - 整段 Request Headers（多行，自动挑出 cookie 行）
+    - Chrome「Copy as cURL」整段（``-H 'Cookie: ...'`` / ``-b '...'``）
+    - ``document.cookie`` 控制台输出
+    - JSON 对象 ``{"sf_u": "xxx"}``
+    - JSON 数组（EditThisCookie / Playwright 导出）``[{"name":"sf_u","value":"xxx"}]``
+
+    只做解析，不落盘。
     """
-    cookie_str = cookie_str.strip()
-    if not cookie_str:
+    if not text or not text.strip():
         return {}
+    raw = text.strip()
 
-    # 尝试 JSON 解析
-    if cookie_str.startswith("{"):
+    # --- JSON ---
+    if raw[0] in "{[":
         try:
-            data = json.loads(cookie_str)
-            if isinstance(data, dict):
-                cookies = {str(k): str(v) for k, v in data.items()}
-                save_cookies(cookies)
-                return cookies
-        except json.JSONDecodeError:
-            pass
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            # 可能是 Playwright 的 {"cookies": [...]} 包装
+            if "cookies" in data and isinstance(data["cookies"], list):
+                data = data["cookies"]
+            else:
+                return {
+                    str(k).strip(): str(v).strip()
+                    for k, v in data.items()
+                    if _KEY_RE.match(str(k).strip()) and str(v).strip()
+                }
+        if isinstance(data, list):
+            out: Dict[str, str] = {}
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                k = str(item.get("name") or item.get("Name") or "").strip()
+                v = str(item.get("value") or item.get("Value") or "").strip()
+                if k and _KEY_RE.match(k):
+                    out[k] = v
+            return out
 
-    # 按 ; 分割的 cookie 字符串
+    # --- 从文本里抽出 cookie 值片段 ---
+    chunks: List[str] = []
+    chunks += [m.strip() for m in _CURL_H_RE.findall(raw)]
+    chunks += [m.strip() for m in _CURL_B_RE.findall(raw)]
+    chunks += [m.strip() for m in _HEADER_RE.findall(raw)]
+    if not chunks:
+        # 没有 "cookie:" 行 → 整段就是 cookie 串；顺手去掉可能有的一行前缀
+        cleaned = re.sub(r"^\s*cookie\s*:\s*", "", raw, flags=re.IGNORECASE)
+        chunks = [cleaned]
+
     cookies: Dict[str, str] = {}
-    for part in cookie_str.split(";"):
-        part = part.strip()
-        if "=" in part:
+    for chunk in chunks:
+        chunk = chunk.strip().strip("'\"")
+        for part in re.split(r"[;\n]", chunk):
+            part = part.strip().strip("'\"")
+            if "=" not in part:
+                continue
             k, v = part.split("=", 1)
-            k = k.strip()
-            if k:
-                cookies[k] = v.strip()
-    if cookies:
-        save_cookies(cookies)
+            k, v = k.strip(), v.strip()
+            if not k or not _KEY_RE.match(k):
+                continue
+            if k.lower() in _COOKIE_ATTRS:
+                continue
+            # cURL 里 -b 可能带 URL / 路径，明显不是 cookie 的跳过
+            if k.lower() in {"curl", "http", "https", "get", "post"}:
+                continue
+            cookies[k] = v
+    return cookies
+
+
+def update_cookies_from_dict(cookie_str: str, merge: bool = True) -> Dict[str, str]:
+    """解析并保存前端粘贴的 Cookie，返回保存后的完整字典。
+
+    ``merge=True``（默认）时与已有 Cookie 合并，只覆盖同名的键——
+    避免用户只粘贴了部分 Cookie 就把整份登录态冲掉。
+    """
+    parsed = parse_cookie_input(cookie_str)
+    if not parsed:
+        return {}
+    cookies = load_cookies() if merge else {}
+    cookies.update(parsed)
+    save_cookies(cookies)
     return cookies
 
 

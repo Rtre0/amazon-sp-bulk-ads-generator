@@ -94,6 +94,7 @@ class RematchRequest(BaseModel):
 class CookieUpdateRequest(BaseModel):
     """Cookie 更新请求。"""
     cookie_str: str
+    merge: bool = True  # 与已有 Cookie 合并，避免只粘贴一部分时冲掉登录态
 
 
 class ShopRegisterRequest(BaseModel):
@@ -227,11 +228,25 @@ def cookie_status():
 
 @app.post("/api/cookie/update")
 def cookie_update(req: CookieUpdateRequest):
-    """手动粘贴 Cookie 字符串更新登录态。"""
-    cookies = sf.update_cookies_from_dict(req.cookie_str)
-    if not cookies:
-        raise HTTPException(status_code=400, detail="Cookie 解析失败，请确保格式正确")
-    return {"ok": True, "cookie_count": len(cookies), "valid": sf.has_valid_cookies()}
+    """手动粘贴 Cookie 更新登录态。
+
+    兼容纯 cookie 串 / 带 ``Cookie:`` 前缀 / 整段 Request Headers /
+    Copy as cURL / document.cookie / JSON 对象 / JSON 数组。
+    """
+    parsed = sf.parse_cookie_input(req.cookie_str)
+    if not parsed:
+        raise HTTPException(
+            status_code=400,
+            detail="没有解析到任何 Cookie。请在开发者工具的「网络 → 标头 → 请求标头」里复制 cookie 那一行的值。",
+        )
+    cookies = sf.update_cookies_from_dict(req.cookie_str, merge=req.merge)
+    return {
+        "ok": True,
+        "parsed": len(parsed),
+        "cookie_count": len(cookies),
+        "has_login": "sf_u" in cookies,
+        "valid": sf.has_valid_cookies(),
+    }
 
 
 @app.post("/api/cookie/grab")
