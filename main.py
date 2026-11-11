@@ -446,7 +446,11 @@ def export_manual_bulk(req: ManualAdExportRequest):
 def create_manual_via_api(req: ManualAdCreateRequest):
     """一键通过赛狐接口直接创建手动广告。
 
-    将手动广告活动、广告组、广告商品、投放关键词推送到赛狐后台。
+    将手动广告活动、广告组、广告商品、投放关键词 / ASIN 推送到赛狐后台。
+
+    赛狐的 ``keywordTarget`` 是二选一开关，同一活动无法同时提交关键词与商品投放；
+    当一个活动两者都有时，这里自动拆成「关键词活动」+「原名称_ASIN 活动」两次创建。
+    Bulk 导出不受此限制（亚马逊允许同一广告组混合两种投放行）。
     """
     if not sf.has_valid_cookies():
         raise HTTPException(
@@ -456,6 +460,8 @@ def create_manual_via_api(req: ManualAdCreateRequest):
 
     results = []
     for seq, campaign in enumerate(req.campaigns, 1):
+        cname = campaign.get("campaign_name", "") or \
+            f"{campaign.get('parent_sku', '')}_手动_{seq}"
         try:
             # 前端字段（keyword_text / match_type）→ 赛狐接口字段（keywordText / matchType）
             keywords = [
@@ -476,30 +482,59 @@ def create_manual_via_api(req: ManualAdCreateRequest):
                 }
                 for p in raw_products
             ]
-            cname = campaign.get("campaign_name", "") or \
-                f"{campaign.get('parent_sku', '')}_手动_{seq}"
-            payload = sf.build_manual_ad_payload(
+            # 手动 ASIN 商品投放（与 Bulk 用的是同一批 ASIN）
+            asins = [
+                a for a in (str(x).strip().upper() for x in (campaign.get("asins") or []))
+                if len(a) == 10 and a.isalnum() and a.startswith("B0")
+            ]
+            asin_bid = str(campaign.get("asin_bid") or campaign.get("default_bid", 25))
+            targetings = [
+                {"type": "asin", "asin": a, "bid": asin_bid}
+                for a in dict.fromkeys(asins)
+            ]
+
+            common = dict(
                 shop_id=req.shop_id,
-                campaign_name=cname,
-                group_name=campaign.get("group_name") or cname,
                 daily_budget=str(campaign.get("daily_budget", 100)),
                 start_date=campaign.get("start_date", ""),
                 end_date=campaign.get("end_date", ""),
                 portfolio_id=campaign.get("portfolio_id", ""),
                 strategy=campaign.get("strategy", "legacyForSales"),
                 default_bid=str(campaign.get("default_bid", 25)),
-                keywords=keywords,
                 products=products,
                 placement_top=campaign.get("placement_top"),
                 placement_product_page=campaign.get("placement_product_page"),
                 placement_rest_of_search=campaign.get("placement_rest_of_search"),
             )
-            resp = sf.create_sp_ad(payload)
-            check = sf.check_create_result(resp)
-            results.append({
-                "campaign_name": cname,
-                **check,
-            })
+
+            # 赛狐 keywordTarget 是二选一开关：同一活动不能同时提交关键词与商品投放。
+            # 两者都有时自动拆成两个活动（ASIN 活动名称加 _ASIN 后缀），避免静默丢投放。
+            submissions = []
+            if keywords:
+                submissions.append((cname, True, keywords, []))
+            if targetings:
+                submissions.append((cname + ("_ASIN" if keywords else ""),
+                                    False, [], targetings))
+            if not submissions:
+                submissions.append((cname, True, [], []))
+
+            for sub_name, kw_target, kws, tgs in submissions:
+                payload = sf.build_manual_ad_payload(
+                    campaign_name=sub_name,
+                    group_name=campaign.get("group_name") or sub_name,
+                    keyword_target=kw_target,
+                    keywords=kws,
+                    targetings=tgs,
+                    **common,
+                )
+                resp = sf.create_sp_ad(payload)
+                check = sf.check_create_result(resp)
+                results.append({
+                    "campaign_name": sub_name,
+                    "target_type": "keyword" if kw_target else "asin",
+                    "split": len(submissions) > 1,
+                    **check,
+                })
         except Exception as exc:
             results.append({
                 "campaign_name": cname,

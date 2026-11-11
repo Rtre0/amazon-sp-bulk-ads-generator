@@ -417,7 +417,7 @@
           投放目标与参数
           <span class="text-[11px] font-normal text-slate-400 ml-2">勾选搜索词 → 选定目标父体 → 导出 Bulk 或接口直推</span>
         </h2>
-        <div class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+        <div class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
           <div class="md:col-span-2">
             <label class="block text-xs font-semibold text-slate-600 mb-1">目标商品（父 SKU）</label>
             <select v-model="mtTargetSku" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -427,13 +427,21 @@
               </option>
             </select>
           </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1">匹配类型</label>
-            <select v-model="mtMatchType" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="exact">精准匹配</option>
-              <option value="phrase">词组匹配</option>
-              <option value="broad">广泛匹配</option>
-            </select>
+          <div class="md:col-span-2">
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              匹配类型
+              <span class="font-normal text-slate-400">（可多选，每个类型生成一条关键词）</span>
+            </label>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 h-[30px]">
+              <label v-for="mt in MATCH_TYPE_OPTIONS" :key="mt.value"
+                     class="inline-flex items-center gap-1 text-xs text-slate-700 cursor-pointer whitespace-nowrap"
+                     :title="mt.tip">
+                <input type="checkbox" :checked="mtMatchTypes.includes(mt.value)"
+                       @change="toggleMatchType(mt.value)"
+                       class="accent-blue-600 w-3.5 h-3.5" />
+                {{ mt.label }}
+              </label>
+            </div>
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-600 mb-1">关键词竞价 (JPY)</label>
@@ -479,6 +487,27 @@
             基准为空/为 0 时回退到 {{ mtBid }} JPY；行数内「建议竞价」列仍可继续单独微调。
           </span>
         </div>
+
+        <!-- ASIN 商品投放 -->
+        <div class="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-3">
+          <div class="text-xs font-semibold text-slate-700 pb-1.5 mr-1">🎯 ASIN 商品投放</div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-500 mb-1">ASIN 竞价 (JPY)</label>
+            <input type="number" min="0" v-model.number="mtAsinBid"
+                   class="w-28 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <button @click="toggleAllAsinTargets" :disabled="!mtRows.length"
+                  class="px-3 py-1.5 border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 text-blue-700 text-xs font-semibold rounded-lg transition-colors"
+                  title="对当前表格里所有行统一勾选 / 取消「投 ASIN」">
+            {{ mtAllAsinTargeted ? '取消全部投 ASIN' : '全部投 ASIN' }}
+          </button>
+          <span class="text-[11px] text-slate-400 pb-1.5">
+            ASIN 来自搜索词报表（该词成交的商品）。勾选「投 ASIN」后，Bulk 会生成
+            <span class="font-mono text-slate-600">asin="B0…"</span> 的 Product Targeting 行；
+            接口直推时会自动拆成单独的 <span class="font-mono text-slate-600">_ASIN</span> 活动。
+            当前勾选行将投放 <strong class="text-blue-600">{{ mtAsinTargetCount }}</strong> 个 ASIN。
+          </span>
+        </div>
       </section>
 
       <!-- 搜索词表 -->
@@ -511,8 +540,8 @@
           <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2.5">
             <div class="min-w-[300px] flex-[2]">
               <label class="block text-[11px] font-semibold text-slate-600 mb-1">
-                广告活动名称
-                <span class="font-normal text-slate-400">（来源活动自动去掉末尾时间戳；可用占位符 &#123;来源活动&#125; &#123;搜索词&#125; &#123;匹配类型&#125; &#123;父SKU&#125;）</span>
+                广告活动名称模板
+                <span class="font-normal text-slate-400">（来源活动自动去掉末尾时间戳；可用占位符 &#123;来源活动&#125; &#123;搜索词&#125; &#123;匹配类型&#125; &#123;ASIN&#125; &#123;父SKU&#125;）</span>
               </label>
               <input v-model="mtNameTemplate" placeholder="{来源活动}_手动_{搜索词}_{匹配类型}"
                      class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -534,26 +563,51 @@
             </div>
             <button @click="resetNameTemplate"
                     class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
-                    title="恢复为「来源活动_手动_搜索词_匹配类型」">
+                    title="恢复默认模板，并清空所有手动改过的活动名">
               🔄 按来源活动生成
             </button>
           </div>
-          <div v-if="mtNamePreview.length" class="mt-2 px-2.5 py-1.5 bg-slate-50 rounded text-[11px] text-slate-500">
-            <span class="font-semibold text-slate-600">活动名预览：</span>
-            <span v-for="(n, i) in mtNamePreview" :key="i" class="mr-3 font-mono text-slate-700">{{ n }}</span>
-            <span v-if="mtNameMode === 'per_keyword' && mtSelected.length > mtNamePreview.length" class="text-slate-400">… 共 {{ mtSelected.length }} 个活动</span>
+
+          <!-- 合并模式：一个活动名，直接可编辑 -->
+          <div v-if="mtNameMode === 'single' && mtSelected.length"
+               class="mt-2.5 px-3 py-2 bg-blue-50/60 border border-blue-100 rounded-lg flex flex-wrap items-center gap-2">
+            <span class="text-[11px] font-semibold text-blue-700 whitespace-nowrap">合并活动名称（可修改）</span>
+            <input :value="nameForRow(mtSelected[0])" @input="setNameOverride('__single__', $event.target.value)"
+                   class="flex-1 min-w-[280px] border border-blue-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <!-- 每个搜索词一个活动：逐条名称在表格里，各自可编辑 -->
+          <div v-else-if="mtSelected.length"
+               class="mt-2.5 px-3 py-2 bg-slate-50 rounded-lg flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            <span>共 <strong class="text-slate-700">{{ mtSelected.length }}</strong> 个候选活动，名称已按模板逐条生成在下方表格「广告活动名称」列，<strong class="text-blue-700">每个都能单独修改</strong>。</span>
+            <span v-if="mtNameEditedCount" class="text-amber-700 font-semibold">已手改 {{ mtNameEditedCount }} 个</span>
+            <button v-if="mtNameEditedCount" @click="clearNameOverrides"
+                    class="px-2 py-0.5 border border-slate-300 bg-white hover:bg-slate-100 text-slate-600 rounded">
+              清空手改
+            </button>
+            <span class="text-slate-400">当前后缀：{{ mtMatchSummary }}；可用 &#123;ASIN&#125; 占位符把 ASIN 写进活动名。</span>
           </div>
         </div>
 
         <div class="overflow-x-auto max-h-[560px]">
-          <table class="w-full text-left text-xs min-w-[1050px]">
+          <table class="w-full text-left text-xs min-w-[1620px]">
             <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200 sticky top-0 z-10">
               <tr>
                 <th class="p-3 w-10 text-center">
                   <input type="checkbox" :checked="mtAllSelected" @change="toggleSelectAllTerms" class="accent-blue-600 w-4 h-4" />
                 </th>
                 <th class="p-3">搜索词</th>
-                <th class="p-3 text-center">匹配类型</th>
+                <th class="p-3 min-w-[260px]" title="按上方模板生成；每个活动名称都可以单独改，导出/直推用这里最终显示的名字">
+                  广告活动名称 <span class="normal-case font-normal text-blue-600">（逐条可改）</span>
+                </th>
+                <th class="p-3" title="该搜索词成交商品的 ASIN，来自搜索词报表">ASIN</th>
+                <th class="p-3 text-center w-20">
+                  投 ASIN
+                  <div class="mt-1 flex justify-center">
+                    <input type="checkbox" :checked="mtAllAsinTargeted" @change="toggleAllAsinTargets"
+                           class="accent-blue-600 w-3.5 h-3.5" title="全选 / 取消全部投 ASIN" />
+                  </div>
+                </th>
+                <th class="p-3 text-center" title="来源活动里该搜索词的原始匹配类型（仅展示，不改变投放）">来源匹配</th>
                 <th class="p-3 text-right">曝光</th>
                 <th class="p-3 text-right">点击</th>
                 <th class="p-3 text-right">花费</th>
@@ -571,7 +625,31 @@
                 <td class="p-3 text-center">
                   <input type="checkbox" v-model="r.selected" class="accent-blue-600 w-4 h-4" />
                 </td>
-                <td class="p-3 font-semibold text-slate-800">{{ r.search_term }}</td>
+                <td class="p-3 font-semibold text-slate-800 max-w-[180px] truncate" :title="r.search_term">{{ r.search_term }}</td>
+                <td class="p-2">
+                  <div class="flex items-center gap-1">
+                    <input :value="nameForRow(r)" @input="setNameOverride(nameKeyOf(r), $event.target.value)"
+                           :disabled="mtNameMode === 'single'"
+                           :placeholder="mtNameMode === 'single' ? '合并为一个活动，名称见上方' : '广告活动名称'"
+                           :class="['w-full min-w-[230px] border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                    isNameOverridden(r) ? 'border-amber-400 bg-amber-50 text-slate-800' : 'border-slate-300 bg-white text-slate-700',
+                                    mtNameMode === 'single' ? 'opacity-50 cursor-not-allowed' : '']" />
+                    <button v-if="isNameOverridden(r) && mtNameMode !== 'single'"
+                            @click="clearNameOverride(nameKeyOf(r))"
+                            class="shrink-0 px-1.5 py-1 border border-slate-300 rounded text-[10px] text-slate-500 hover:bg-slate-100"
+                            title="还原为按模板生成的名称">↺</button>
+                  </div>
+                </td>
+                <td class="p-3">
+                  <span v-if="r.asin" class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700" :title="'MSKU: ' + (r.msku || '-')">
+                    {{ r.asin }}
+                  </span>
+                  <span v-else class="text-slate-300">-</span>
+                </td>
+                <td class="p-3 text-center">
+                  <input type="checkbox" v-model="r.target_asin" :disabled="!r.asin"
+                         class="accent-blue-600 w-4 h-4" :title="r.asin ? '把 ' + r.asin + ' 作为商品投放' : '该行没有 ASIN'" />
+                </td>
                 <td class="p-3 text-center text-slate-500">{{ r.match_type || '-' }}</td>
                 <td class="p-3 text-right text-slate-600">{{ fmt(r.impressions) }}</td>
                 <td class="p-3 text-right text-slate-600">{{ fmt(r.clicks) }}</td>
@@ -593,7 +671,7 @@
                 <td class="p-3 text-slate-400 truncate max-w-[180px]" :title="r.campaign_name">{{ r.campaign_name }}</td>
               </tr>
               <tr v-if="!mtRows.length">
-                <td colspan="12" class="p-10 text-center text-slate-400">
+                <td colspan="15" class="p-10 text-center text-slate-400">
                   {{ mtLoading ? '查询中…' : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取' }}
                 </td>
               </tr>
@@ -603,8 +681,10 @@
         <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
           行内「建议竞价」列可单独改每个关键词的竞价，留空则使用上方统一的
           <strong class="text-slate-700">{{ mtBid }}</strong> JPY；「原始 CPC」列是倍数竞价的基准。
-          活动名按上方模板生成，来源活动末尾的时间戳（如 <span class="font-mono">-20260801 10:21:16.51</span>）会自动去掉。
-          生成结构：Campaign（手动）→ Ad Group → Product Ad（每子体一行）→ Keyword（每关键词一行）。
+          活动名按上方模板生成并逐条显示在表格里，来源活动末尾的时间戳（如 <span class="font-mono">-20260801 10:21:16.51</span>）会自动去掉；手改过的框会变成<span class="text-amber-700 font-semibold">黄色</span>。
+          勾选多个匹配类型时，每个搜索词的活动内会按类型各生成一条 Keyword；勾选「投 ASIN」会额外生成
+          <span class="font-mono">Product Targeting</span> 行（接口直推时自动拆成 <span class="font-mono">_ASIN</span> 活动）。
+          生成结构：Campaign（手动）→ Ad Group → Product Ad（每子体一行）→ Keyword / Product Targeting。
         </div>
       </section>
     </div>
@@ -1506,25 +1586,70 @@
         const mtSyncing = ref(false);
         const mtProducts = ref([]);
         const mtTargetSku = ref('');
-        const mtMatchType = ref('exact');
+        // 匹配类型改成多选勾选：勾选几个，每个搜索词就生成几条 Keyword
+        const MATCH_TYPE_OPTIONS = [
+          { value: 'exact',  label: '精准', tip: '精准匹配 exact' },
+          { value: 'phrase', label: '词组', tip: '词组匹配 phrase' },
+          { value: 'broad',  label: '宽泛', tip: '广泛匹配 broad' }
+        ];
+        const MATCH_TYPE_LABEL = { exact: '精准匹配', phrase: '词组匹配', broad: '广泛匹配' };
+        const MATCH_TYPE_SHORT = { exact: '精准', phrase: '词组', broad: '宽泛' };
+        const mtMatchTypes = ref(['exact']);
         const mtBid = ref(15);
         const mtDefaultBid = ref(25);
         const mtDailyBudget = ref(100);
+        const mtAsinBid = ref(25);          // 手动 ASIN 商品投放竞价
         const mtExporting = ref(false);
         const mtCreating = ref(false);
         // 竞价批量应用
         const mtBidBase = ref('cpc');       // cpc | suggested | fixed
         const mtBidFactor = ref(1.4);
-        // 广告活动命名
+        // 广告活动命名：模板统一生成 + 逐条手改覆盖
         const DEFAULT_NAME_TPL = '{来源活动}_手动_{搜索词}_{匹配类型}';
         const mtNameTemplate = ref(DEFAULT_NAME_TPL);
         const mtNameMode = ref('per_keyword'); // per_keyword | single
         const mtNameMatchMode = ref('new');    // new | source | none
-        const MATCH_TYPE_LABEL = { exact: '精准匹配', phrase: '词组匹配', broad: '广泛匹配' };
+        const mtNameOverrides = ref({});       // { 行 key: 用户手改的活动名 }
 
         const mtSelected = computed(() => mtRows.value.filter(r => r.selected));
         const mtAllSelected = computed(() =>
           mtRows.value.length > 0 && mtRows.value.every(r => r.selected));
+        const ASIN_RE = /^B0[A-Z0-9]{8}$/i;
+        const asinOf = (r) => {
+          const a = String((r && r.asin) || '').trim().toUpperCase();
+          return ASIN_RE.test(a) ? a : '';
+        };
+        // 只统计「已勾选搜索词」行：未勾选的行不会生成活动，不应计入实际投放数
+        const mtAsinTargetCount = computed(() =>
+          mtSelected.value.filter(r => r.target_asin && asinOf(r)).length);
+        const mtAllAsinTargeted = computed(() => {
+          const candidates = mtRows.value.filter(r => asinOf(r));
+          return candidates.length > 0 && candidates.every(r => r.target_asin);
+        });
+
+        /* ---- 匹配类型多选：至少保留一项，顺序固定 exact → phrase → broad ---- */
+        const toggleMatchType = (v) => {
+          const cur = mtMatchTypes.value.slice();
+          const idx = cur.indexOf(v);
+          if (idx >= 0) {
+            if (cur.length === 1) { showToast('至少保留一种匹配类型'); return; }
+            cur.splice(idx, 1);
+          } else {
+            cur.push(v);
+          }
+          mtMatchTypes.value = MATCH_TYPE_OPTIONS
+            .filter(o => cur.includes(o.value)).map(o => o.value);
+        };
+        const toggleAllAsinTargets = () => {
+          const target = !mtAllAsinTargeted.value;
+          let n = 0;
+          mtRows.value.forEach(r => {
+            if (!asinOf(r)) { r.target_asin = false; return; }
+            r.target_asin = target;
+            n++;
+          });
+          showToast(target ? `已勾选 ${n} 个 ASIN 商品投放` : '已取消全部 ASIN 商品投放');
+        };
 
         /* ---- 来源活动名清洗：去掉末尾时间戳 ---- */
         const cleanSourceCampaignName = (raw) => {
@@ -1538,10 +1663,16 @@
           return s || '手动拓词';
         };
 
+        const mtMatchSummary = computed(() =>
+          (mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'])
+            .map(v => MATCH_TYPE_SHORT[v]).join('+') || '精准');
+
         const mtMatchSuffix = (r) => {
           if (mtNameMatchMode.value === 'none') return '';
           if (mtNameMatchMode.value === 'source') return (r && r.match_type) || '';
-          return MATCH_TYPE_LABEL[mtMatchType.value] || '精准匹配';
+          const list = mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'];
+          if (list.length === 1) return MATCH_TYPE_LABEL[list[0]];
+          return list.map(v => MATCH_TYPE_SHORT[v]).join('+');
         };
 
         const renderCampaignName = (r, opts = {}) => {
@@ -1552,25 +1683,63 @@
             .replace(/\{来源活动\}/g, base)
             .replace(/\{搜索词\}/g, opts.single ? '搜索词拓词' : kw)
             .replace(/\{匹配类型\}/g, mtMatchSuffix(r))
+            .replace(/\{ASIN\}/g, asinOf(r))
+            .replace(/\{MSKU\}/g, (r && r.msku) || '')
             .replace(/\{父SKU\}/g, mtTargetSku.value || '');
           // 后缀为空 / 无占位符模板时，清掉尾部多余的分隔符
           name = name.replace(/_{2,}/g, '_').replace(/[\s_\-]+$/g, '').trim();
           return name || `${base}_手动_${kw}`;
         };
 
-        const mtNamePreview = computed(() => {
-          const rows = mtSelected.value;
-          if (!rows.length) return [];
-          if (mtNameMode.value === 'single') {
-            return [renderCampaignName(rows[0], { single: true })];
-          }
-          return rows.slice(0, 3).map(r => renderCampaignName(r));
+        /* ---- 逐条活动名：模板自动生成 + 每行文本框单独覆盖 ---- */
+        // 用数据库主键做稳定 key；合并模式共用一个 key
+        const nameKeyOf = (r) => {
+          if (mtNameMode.value === 'single') return '__single__';
+          if (r && r.id != null) return 'r' + r.id;
+          return 'r_' + [(r && r.report_date) || '', (r && r.search_term) || '',
+                         (r && r.campaign_name) || ''].join('|');
+        };
+        const rawOverrideOf = (r) => {
+          const o = mtNameOverrides.value;
+          const k = nameKeyOf(r);
+          return Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null;
+        };
+        const nameForRow = (r) => {
+          const v = rawOverrideOf(r);
+          if (v != null) return String(v);
+          return renderCampaignName(r, { single: mtNameMode.value === 'single' });
+        };
+        const finalNameForRow = (r) => {
+          const v = nameForRow(r);
+          return String(v).trim() ||
+            renderCampaignName(r, { single: mtNameMode.value === 'single' });
+        };
+        const isNameOverridden = (r) => rawOverrideOf(r) != null;
+        const setNameOverride = (key, val) => {
+          mtNameOverrides.value = { ...mtNameOverrides.value, [key]: String(val ?? '') };
+        };
+        const clearNameOverride = (key) => {
+          const o = { ...mtNameOverrides.value };
+          delete o[key];
+          mtNameOverrides.value = o;
+        };
+        const clearNameOverrides = () => {
+          mtNameOverrides.value = {};
+          showToast('已清空手改，全部恢复按模板生成');
+        };
+        const mtNameEditedCount = computed(() => {
+          const o = mtNameOverrides.value;
+          const keys = mtNameMode.value === 'single'
+            ? ['__single__']
+            : mtSelected.value.map(r => nameKeyOf(r));
+          return keys.filter(k => Object.prototype.hasOwnProperty.call(o, k)).length;
         });
 
         const resetNameTemplate = () => {
           mtNameTemplate.value = DEFAULT_NAME_TPL;
           mtNameMatchMode.value = 'new';
-          showToast('已恢复「来源活动_手动_搜索词_匹配类型」命名');
+          mtNameOverrides.value = {};
+          showToast('已恢复「来源活动_手动_搜索词_匹配类型」并清空手改');
         };
 
         /* ---- 竞价批量应用 ---- */
@@ -1628,7 +1797,12 @@
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(d.detail || '查询失败'); return; }
-            mtRows.value = (d.rows || []).map(r => ({ ...r, selected: false }));
+            mtRows.value = (d.rows || []).map(r => ({
+              ...r,
+              selected: false,
+              target_asin: false   // ASIN 商品投放需逐行主动勾选
+            }));
+            mtNameOverrides.value = {};   // 换一批搜索词后，旧的手改名不应残留
             mtTotal.value = d.total || 0;
           } catch (e) {
             showToast('查询失败：' + (e.message || '网络异常'));
@@ -1661,37 +1835,45 @@
           const selected = mtSelected.value;
           if (!selected.length) return [];
           const children = (p.children || []).map(c => ({ msku: c.msku, asin: c.asin }));
-          const kwOf = (r) => ({
+          const matchTypes = mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'];
+          // 一个搜索词 × 勾选的每种匹配类型 = 一条 Keyword
+          const kwOf = (r) => matchTypes.map(mt => ({
             keyword_text: r.search_term,
-            match_type: mtMatchType.value,
+            match_type: mt,
             bid: Number(r.bid) || Number(mtBid.value) || 15
-          });
+          }));
+          const asinsOf = (rows) => Array.from(new Set(
+            rows.filter(r => r.target_asin).map(asinOf).filter(Boolean)
+          ));
           const common = {
             parent_sku: p.parent_sku,
             product_name: p.product_name,
             children,
             products: children,
             daily_budget: Number(mtDailyBudget.value) || 100,
-            default_bid: Number(mtDefaultBid.value) || 25
+            default_bid: Number(mtDefaultBid.value) || 25,
+            asin_bid: Number(mtAsinBid.value) || Number(mtDefaultBid.value) || 25
           };
-          // 合并为一个活动：所有勾选的搜索词进同一活动
+          // 合并为一个活动：所有勾选的搜索词 + 所有勾选的 ASIN 进同一活动
           if (mtNameMode.value === 'single') {
-            const cname = renderCampaignName(selected[0], { single: true });
+            const cname = finalNameForRow(selected[0]);
             return [{
               ...common,
               campaign_name: cname,
               group_name: cname,
-              keywords: selected.map(kwOf)
+              keywords: selected.flatMap(kwOf),
+              asins: asinsOf(selected)
             }];
           }
-          // 默认：每个搜索词一个独立活动，名称 = 来源活动_手动_搜索词_匹配类型
+          // 默认：每个搜索词一个独立活动；活动名取表格里该行文本框最终显示的值
           return selected.map(r => {
-            const cname = renderCampaignName(r);
+            const cname = finalNameForRow(r);
             return {
               ...common,
               campaign_name: cname,
               group_name: cname,
-              keywords: [kwOf(r)]
+              keywords: kwOf(r),
+              asins: asinsOf([r])
             };
           });
         };
@@ -1720,7 +1902,9 @@
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
-            showToast(`已导出手动广告 Bulk（${campaigns.length} 个活动 / ${mtSelected.value.length} 个关键词）`);
+            const kwCount = campaigns.reduce((s, c) => s + (c.keywords || []).length, 0);
+            const asinCount = campaigns.reduce((s, c) => s + (c.asins || []).length, 0);
+            showToast(`已导出手动广告 Bulk（${campaigns.length} 个活动 / ${kwCount} 条关键词 / ${asinCount} 个 ASIN 商品投放）`);
           } catch (e) {
             showToast('导出失败：' + (e.message || '网络异常'));
           } finally {
@@ -1743,7 +1927,9 @@
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(d.detail || '创建失败'); return; }
-            showToast(`接口直推已提交 ${campaigns.length} 个活动，请到赛狐后台确认`);
+            const hasAsin = campaigns.some(c => (c.asins || []).length);
+            const submitted = (d.results || []).length || campaigns.length;
+            showToast(`接口直推已提交 ${submitted} 个活动${hasAsin ? '（含自动拆分的 _ASIN 活动）' : ''}，请到赛狐后台确认`);
           } catch (e) {
             showToast('创建失败：' + (e.message || '网络异常'));
           } finally {
@@ -1869,10 +2055,15 @@
           discovering, syncingShop, syncDays, syncMsg, discoverShops, syncProducts, syncSearchTerms,
           /* 手动广告 */
           mtShopId, mtStartDate, mtEndDate, mtKeyword, mtOnlyOrders, mtRows, mtTotal,
-          mtLoading, mtSyncing, mtProducts, mtTargetSku, mtMatchType, mtBid, mtDefaultBid,
+          mtLoading, mtSyncing, mtProducts, mtTargetSku, mtBid, mtDefaultBid,
           mtDailyBudget, mtExporting, mtCreating, mtSelected, mtAllSelected,
           mtBidBase, mtBidFactor, applyBidFactor, applyFixedBid,
-          mtNameTemplate, mtNameMode, mtNameMatchMode, mtNamePreview, resetNameTemplate,
+          MATCH_TYPE_OPTIONS, mtMatchTypes, toggleMatchType, mtMatchSummary,
+          mtAsinBid, mtAsinTargetCount, mtAllAsinTargeted, toggleAllAsinTargets,
+          mtNameTemplate, mtNameMode, mtNameMatchMode, mtNameOverrides,
+          nameKeyOf, nameForRow, finalNameForRow, isNameOverridden,
+          setNameOverride, clearNameOverride, clearNameOverrides,
+          mtNameEditedCount, resetNameTemplate,
           toggleSelectAllTerms, loadSearchTerms, exportManualBulk, createManualViaApi,
           /* 定时任务 */
           schedStatus, schedBusy, schedMsg, loadSchedStatus, toggleScheduler, saveSchedConfig, runJobNow

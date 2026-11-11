@@ -855,11 +855,20 @@ def build_manual_ad_payload(
     placement_top: Optional[str] = None,
     placement_product_page: Optional[str] = None,
     placement_rest_of_search: Optional[str] = None,
+    keyword_target: bool = True,
+    targetings: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """构建手动关键词投放 SP 广告的请求体。
+    """构建手动投放 SP 广告的请求体。
 
     ``keywords`` 格式：``[{"keywordText": "dog cage", "matchType": "exact", "bid": "15"}]``
     ``matchType`` 枚举：``exact`` / ``phrase`` / ``broad`` / ``theme``
+
+    赛狐的 ``keywordTarget`` 是**二选一开关**：
+    - ``True``  + ``keywords[]``  → 关键词投放面板
+    - ``False`` + ``targetings[]`` → 商品投放（ASIN）面板
+
+    因此同一个活动不能同时提交两类投放；调用方需自行拆分（见 main.py）。
+    ``targetings`` 项格式：``[{"type": "asin", "asin": "B0XXXXXXXX", "bid": "25"}]``
     """
     today = start_date or time.strftime("%Y-%m-%d")
     return {
@@ -892,7 +901,7 @@ def build_manual_ad_payload(
         },
         "spTargetInfo": {
             "autoTarget": False,
-            "keywordTarget": True,
+            "keywordTarget": bool(keyword_target),
             "queryHighRelMatchesState": True,
             "queryHighRelMatchesBid": "",
             "queryBroadRelMatchesState": True,
@@ -902,7 +911,7 @@ def build_manual_ad_payload(
             "asinAccessoryRelatedState": True,
             "asinAccessoryRelatedBid": "",
             "keywords": keywords or [],
-            "targetings": [],
+            "targetings": targetings or [],
             "neKeywords": [],
             "neTargetings": [],
         },

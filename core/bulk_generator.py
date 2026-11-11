@@ -164,6 +164,12 @@ VALID_ENTITIES = frozenset(
 # 自动投放的 4 组匹配类型（亚马逊受控值，写入「拓展商品投放编号」列的裸值）
 AUTO_TARGETING = ["close-match", "loose-match", "substitutes", "complements"]
 
+# 手动广告「ASIN 商品投放」的官方表达式：asin="B0XXXXXXXX"
+# 与自动投放的 4 组裸受控值不同，但同样是亚马逊认可的合法值。
+MANUAL_ASIN_EXPR_RE = re.compile(r'^asin="[A-Z0-9]{10}"$', re.IGNORECASE)
+_ASIN_CODE_RE = re.compile(r"^[A-Z0-9]{10}$")
+
+
 # 「投放类型」受控值
 TARGETING_TYPE_AUTO = "Auto"
 TARGETING_TYPE_MANUAL = "Manual"
@@ -439,13 +445,18 @@ def _validate_output(df: "pd.DataFrame") -> None:
                 f"{blank_rows} 行 Product Targeting 的「{TARGETING_EXPR_COLUMN}」为空"
                 "（亚马逊会报「以下列缺少值」）"
             )
-        bad_expr = sorted(
-            {str(v) for v in expr.dropna() if str(v).strip() and str(v) not in AUTO_TARGETING}
-        )
+        # 自动投放 = 4 组裸受控值；手动广告 = asin="B0XXXXXXXX" 商品投放
+        bad_expr = sorted({
+            str(v).strip() for v in expr.dropna()
+            if str(v).strip()
+            and str(v).strip() not in AUTO_TARGETING
+            and not MANUAL_ASIN_EXPR_RE.match(str(v).strip())
+        })
         if bad_expr:
             problems.append(
                 f"Product Targeting 的「{TARGETING_EXPR_COLUMN}」必须是裸受控值 "
-                f"{AUTO_TARGETING}，发现：{bad_expr}"
+                f"{AUTO_TARGETING} 或手动 ASIN 表达式 "
+                + 'asin="B0XXXXXXXX"，发现：' + str(bad_expr)
             )
         # 投放行不得携带关键词字段
         if "关键词文本" in df.columns:
@@ -587,6 +598,10 @@ def generate_manual_keyword_bulk(
                     {"keyword_text": "dog cage", "match_type": "exact", "bid": 15.0},
                     ...
                 ],
+                # 可选：手动 ASIN 商品投放，逐条生成 Product Targeting 行
+                # 表达式固定为 asin="B0XXXXXXXX"，与 Keyword 行可共存于同一广告组
+                "asins": ["B0FP582VLF"],
+                "asin_bid": 25.0,  # 可选，留空用 default_bid
                 "daily_budget": 100.0,
                 "default_bid": 25.0,
             }
@@ -720,6 +735,29 @@ def generate_manual_keyword_bulk(
                 "竞价": kw_bid,
                 "关键词文本": kw_text,
                 "匹配类型": match_type_bulk,
+            })
+
+        # 6. Product Targeting 行（手动 ASIN 商品投放）
+        #    亚马逊 Bulk 允许同一广告组里同时存在 Keyword 与 Product Targeting 行。
+        #    表达式必须写成官方受控格式 asin="B0XXXXXXXX"（见 21.2.2 实测）。
+        asins = item.get("asins") or []
+        asin_bid = _to_float(item.get("asin_bid", default_bid), default_bid)
+        seen_asins: set = set()
+        for raw_asin in asins:
+            asin = str(raw_asin or "").strip().upper()
+            if not _ASIN_CODE_RE.match(asin) or asin in seen_asins:
+                continue
+            seen_asins.add(asin)
+            rows.append({
+                "产品": "Sponsored Products",
+                "实体层级": "Product Targeting",
+                "操作": "Create",
+                "广告活动编号": campaign_id,
+                "广告组编号": ad_group_id,
+                "状态": "enabled",
+                "竞价": asin_bid,
+                TARGETING_EXPR_COLUMN: f'asin="{asin}"',
+                "ASIN": asin,  # 辅助列，仅供人工复核
             })
 
     output_df = pd.DataFrame(rows)
