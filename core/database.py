@@ -1,17 +1,22 @@
 """SQLite 本地数据持久化层。
 
-三张核心表：
+四张核心表：
 1. ``shops`` — 店铺注册表（shop_id / shop_name / 站点 / 最后同步时间）
 2. ``products`` — 商品库（服务于自动广告模块），(shop_id, msku, asin) 联合唯一索引，
-   增量去重：已存在的旧商品直接跳过，仅入库新上架商品。
-3. ``ad_search_terms_daily`` — 每日搜索词报告（服务于手动广告模块），
-   按日存储搜索词维度的曝光/点击/花费/出单/ACoS/CVR/建议竞价等全量指标。
+   增量去重：已存在的旧商品直接跳过，不覆盖用户已微调过的中文品名。
+3. ``ad_search_terms_daily`` — 每日「用户搜索词」维度报告（手动广告模块）。
+4. ``ad_search_asin_daily`` — 每日「投放产生 ASIN」维度报告（手动广告模块）。
+   两个维度来自赛狐同一接口的不同 ``searchQueryType``，必须分开存，不能混进一张表。
 
 设计原则
 --------
 - 全部用标准库 ``sqlite3``，无需额外依赖（SQLAlchemy 留作可选）。
 - 线程安全：每次操作 ``with get_conn()`` 自动 commit / close。
-- ``INSERT OR IGNORE`` 实现增量去重，不覆盖用户已微调的中文品名。
+- 搜索词/ASIN 日报用 ``ON CONFLICT DO UPDATE``：赛狐会回溯修正历史报表，
+  重复同步要能覆盖旧指标，同时保证入库计数真实。
+- 查询支持「按天明细」和「区间汇总」两种口径；后者用 GROUP BY 把所选日期
+  区间内的同一词/ASIN 汇总成一行，对齐赛狐区间报表，并用 ``order_dates``
+  补上「出单时间」（赛狐区间行不带这个信息）。
 - 所有表都带 ``created_at`` 时间戳，便于追踪入库时间。
 """
 
@@ -118,27 +123,89 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_st_date_shop  ON ad_search_terms_daily(report_date, shop_id);
         CREATE INDEX IF NOT EXISTS idx_st_shop       ON ad_search_terms_daily(shop_id);
         CREATE INDEX IF NOT EXISTS idx_st_orders     ON ad_search_terms_daily(ad_orders);
+
+        -- v2.2：赛狐「投放产生 ASIN」维度（searchQueryType=searchAsin）。
+        -- 与搜索词维度分开存，避免污染 ad_search_terms_daily 的唯一键，
+        -- 也不会影响自动广告模块原有的任何查询。
+        CREATE TABLE IF NOT EXISTS ad_search_asin_daily (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date     TEXT NOT NULL,
+            shop_id         TEXT NOT NULL,
+            shop_name       TEXT NOT NULL DEFAULT '',
+            campaign_id     TEXT,
+            campaign_name   TEXT,
+            group_id        TEXT,
+            group_name      TEXT,
+            target_asin     TEXT,          -- 投放产生的商品页 ASIN（接口 query）
+            targeting_expression TEXT,    -- substitutes / asin="B0..." / close-match
+            targeting_type  TEXT,          -- spTargeting / spQuery
+            match_type      TEXT,
+            impressions     INTEGER DEFAULT 0,
+            clicks          INTEGER DEFAULT 0,
+            ctr             REAL,
+            ad_cost         REAL DEFAULT 0,
+            cpc             REAL,
+            ad_orders       INTEGER DEFAULT 0,
+            ad_sales        REAL DEFAULT 0,
+            cvr             REAL,
+            acos            REAL,
+            roas            REAL,
+            suggested_bid   REAL,
+            price           REAL,          -- 竞品价（ASIN 维度特有）
+            asin_rating     REAL,
+            rating_count    INTEGER,
+            asin            TEXT,          -- 自家广告商品 ASIN
+            msku            TEXT,
+            created_at      TEXT NOT NULL,
+            UNIQUE(report_date, shop_id, target_asin, campaign_id, targeting_expression)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sa_date_shop ON ad_search_asin_daily(report_date, shop_id);
+        CREATE INDEX IF NOT EXISTS idx_sa_orders    ON ad_search_asin_daily(ad_orders);
         """
     )
+    # v2.4：多赛狐账号。店铺归属于哪个账号，用于前端分组和同步范围校验。
+    _ensure_column(conn, "shops", "account_id", "TEXT NOT NULL DEFAULT ''")
     conn.commit()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, ddl: str
+) -> None:
+    """幂等加列（老库升级用，SQLite 不支持 ADD COLUMN IF NOT EXISTS）。"""
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 # ---------------------------------------------------------------------------
 # shops 表操作
 # ---------------------------------------------------------------------------
-def upsert_shop(shop_id: str, shop_name: str = "", marketplace: str = "A1VC38T7YXB528") -> None:
-    """插入或更新店铺记录。"""
+def upsert_shop(
+    shop_id: str,
+    shop_name: str = "",
+    marketplace: str = "A1VC38T7YXB528",
+    account_id: str = "",
+) -> None:
+    """插入或更新店铺记录。
+
+    ``account_id`` 为空时保留原有归属，避免单店同步把账号信息抹掉。
+    """
     conn = get_conn()
     now = datetime.now().isoformat()
     conn.execute(
         """
-        INSERT INTO shops (shop_id, shop_name, marketplace, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO shops (shop_id, shop_name, marketplace, account_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(shop_id) DO UPDATE SET
             shop_name   = excluded.shop_name,
-            marketplace = excluded.marketplace
+            marketplace = excluded.marketplace,
+            account_id  = CASE
+                WHEN excluded.account_id != '' THEN excluded.account_id
+                ELSE shops.account_id
+            END
         """,
-        (shop_id, shop_name, marketplace, now),
+        (shop_id, shop_name, marketplace, account_id, now),
     )
     conn.commit()
 
@@ -152,10 +219,16 @@ def update_shop_sync_time(shop_id: str, sync_type: str = "product") -> None:
     conn.commit()
 
 
-def list_shops() -> List[Dict[str, Any]]:
-    """返回所有已注册的店铺。"""
+def list_shops(account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """返回已注册的店铺；给了 ``account_id`` 只返回该账号名下的。"""
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM shops ORDER BY shop_id").fetchall()
+    if account_id:
+        rows = conn.execute(
+            "SELECT * FROM shops WHERE account_id = ? ORDER BY shop_id",
+            (account_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM shops ORDER BY shop_id").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -279,7 +352,12 @@ def count_products(shop_id: str) -> int:
 # ad_search_terms_daily 表操作
 # ---------------------------------------------------------------------------
 def insert_search_term(row: Dict[str, Any]) -> bool:
-    """插入一条搜索词数据（去重：同日期+店铺+搜索词+活动+匹配类型只存一条）。"""
+    """写入一条搜索词数据。
+
+    同「日期+店铺+搜索词+活动+匹配类型」已存在时**更新指标**（赛狐会回溯修正
+    历史报表，重新同步必须能覆盖旧值），否则插入。返回是否实际写入了行，
+    供同步结果给出真实的入库条数。
+    """
     conn = get_conn()
     now = datetime.now().isoformat()
 
@@ -296,15 +374,25 @@ def insert_search_term(row: Dict[str, Any]) -> bool:
         except (TypeError, ValueError):
             return default
 
-    conn.execute(
+    cur = conn.execute(
         """
-        INSERT OR IGNORE INTO ad_search_terms_daily
+        INSERT INTO ad_search_terms_daily
             (report_date, shop_id, shop_name, campaign_id, campaign_name,
              group_id, group_name, search_term, match_type,
              impressions, clicks, ctr, ad_cost, cpc,
              ad_orders, ad_sales, cvr, acos, roas, suggested_bid,
              asin, msku, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(report_date, shop_id, search_term, campaign_id, match_type)
+        DO UPDATE SET
+            shop_name=excluded.shop_name, campaign_name=excluded.campaign_name,
+            group_id=excluded.group_id, group_name=excluded.group_name,
+            impressions=excluded.impressions, clicks=excluded.clicks, ctr=excluded.ctr,
+            ad_cost=excluded.ad_cost, cpc=excluded.cpc,
+            ad_orders=excluded.ad_orders, ad_sales=excluded.ad_sales,
+            cvr=excluded.cvr, acos=excluded.acos, roas=excluded.roas,
+            suggested_bid=excluded.suggested_bid,
+            asin=excluded.asin, msku=excluded.msku, created_at=excluded.created_at
         """,
         (
             row.get("report_date", ""),
@@ -333,16 +421,351 @@ def insert_search_term(row: Dict[str, Any]) -> bool:
         ),
     )
     conn.commit()
-    return True
+    return cur.rowcount > 0
 
 
 def insert_search_terms_batch(rows: List[Dict[str, Any]]) -> int:
-    """批量插入搜索词数据，返回成功插入的条数。"""
+    """批量写入搜索词数据，返回实际写入/更新的条数。"""
     count = 0
     for r in rows:
         if insert_search_term(r):
             count += 1
     return count
+
+
+def _num(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def insert_search_asin(row: Dict[str, Any]) -> bool:
+    """插入一条「投放产生 ASIN」维度数据（INSERT OR IGNORE 去重）。"""
+    conn = get_conn()
+    now = datetime.now().isoformat()
+    cur = conn.execute(
+        """
+        INSERT INTO ad_search_asin_daily
+            (report_date, shop_id, shop_name, campaign_id, campaign_name,
+             group_id, group_name, target_asin, targeting_expression,
+             targeting_type, match_type, impressions, clicks, ctr, ad_cost, cpc,
+             ad_orders, ad_sales, cvr, acos, roas, suggested_bid,
+             price, asin_rating, rating_count, asin, msku, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(report_date, shop_id, target_asin, campaign_id, targeting_expression)
+        DO UPDATE SET
+            shop_name=excluded.shop_name, campaign_name=excluded.campaign_name,
+            group_id=excluded.group_id, group_name=excluded.group_name,
+            targeting_type=excluded.targeting_type, match_type=excluded.match_type,
+            impressions=excluded.impressions, clicks=excluded.clicks, ctr=excluded.ctr,
+            ad_cost=excluded.ad_cost, cpc=excluded.cpc,
+            ad_orders=excluded.ad_orders, ad_sales=excluded.ad_sales,
+            cvr=excluded.cvr, acos=excluded.acos, roas=excluded.roas,
+            suggested_bid=excluded.suggested_bid, price=excluded.price,
+            asin_rating=excluded.asin_rating, rating_count=excluded.rating_count,
+            asin=excluded.asin, msku=excluded.msku, created_at=excluded.created_at
+        """,
+        (
+            row.get("report_date", ""), row.get("shop_id", ""), row.get("shop_name", ""),
+            row.get("campaign_id", ""), row.get("campaign_name", ""),
+            row.get("group_id", ""), row.get("group_name", ""),
+            str(row.get("target_asin") or "").strip().upper(),
+            row.get("targeting_expression", ""), row.get("targeting_type", ""),
+            row.get("match_type", ""),
+            int(_num(row.get("impressions"))), int(_num(row.get("clicks"))),
+            _num(row.get("ctr")), _num(row.get("ad_cost")), _num(row.get("cpc")),
+            int(_num(row.get("ad_orders"))), _num(row.get("ad_sales")),
+            _num(row.get("cvr")), _num(row.get("acos")), _num(row.get("roas")),
+            _num(row.get("suggested_bid")), _num(row.get("price")),
+            _num(row.get("asin_rating")), int(_num(row.get("rating_count"))),
+            row.get("asin", ""), row.get("msku", ""), now,
+        ),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def insert_search_asins_batch(rows: List[Dict[str, Any]]) -> int:
+    return sum(1 for r in rows if insert_search_asin(r))
+
+
+def _attach_order_dates(
+    rows: List[Dict[str, Any]],
+    table: str,
+    key_col: str,
+    shop_id: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    """给每行补上「出单时间」：同店铺+同词/ASIN+同活动在查询区间内所有出单日期。
+
+    赛狐的区间报表把 10 天出单汇总成一行，本地库是按天存的，
+    没有这个字段就无法看出「到底哪几天出的单」，也无法和赛狐核对。
+    """
+    if not rows:
+        return rows
+    conn = get_conn()
+    sql = (
+        f"SELECT shop_id, {key_col} AS k, campaign_id, "
+        f"GROUP_CONCAT(DISTINCT report_date) AS ds "
+        f"FROM {table} WHERE ad_orders >= 1"
+    )
+    params: List[Any] = []
+    if shop_id:
+        sql += " AND shop_id = ?"
+        params.append(shop_id)
+    if start_date:
+        sql += " AND report_date >= ?"
+        params.append(start_date)
+    if end_date:
+        sql += " AND report_date <= ?"
+        params.append(end_date)
+    sql += " GROUP BY shop_id, k, campaign_id"
+    mapping = {
+        (str(x["shop_id"]), str(x["k"] or ""), str(x["campaign_id"] or "")): (x["ds"] or "")
+        for x in conn.execute(sql, params).fetchall()
+    }
+    for r in rows:
+        ds = mapping.get(
+            (str(r.get("shop_id") or ""), str(r.get("search_term") or ""),
+             str(r.get("campaign_id") or "")), ""
+        )
+        dates = sorted(d for d in ds.split(",") if d)
+        r["order_dates"] = "、".join(d[5:] for d in dates)   # 11-07、11-09
+        r["order_date"] = dates[-1] if dates else (r.get("report_date") or "")
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 区间聚合查询（v2.3）
+#
+# 赛狐的「广告搜索词 / 投放产生 ASIN」页面给的是**区间汇总一行**，而本地库按天存。
+# 直接把按天明细丢给前端，同一词会散成多行，用户拿去和赛狐核对时必然对不上。
+# 这里按「店铺 + 活动 + 广告组 + 词/ASIN + 匹配类型」在所选日期区间内求和，
+# 并用 HAVING SUM(ad_orders) >= 1 复现赛狐「有成交」的区间口径。
+# ---------------------------------------------------------------------------
+def _f(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _agg_filters(
+    shop_id: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    keyword: str,
+    like_cols: List[str],
+):
+    clauses: List[str] = []
+    params: List[Any] = []
+    if shop_id:
+        clauses.append("shop_id = ?")
+        params.append(shop_id)
+    if start_date:
+        clauses.append("report_date >= ?")
+        params.append(start_date)
+    if end_date:
+        clauses.append("report_date <= ?")
+        params.append(end_date)
+    if keyword:
+        clauses.append("(" + " OR ".join(f"{c} LIKE ?" for c in like_cols) + ")")
+        params.extend([f"%{keyword}%"] * len(like_cols))
+    return (" AND ".join(clauses) or "1=1"), params
+
+
+def _agg_finish(rows: List[Dict[str, Any]]) -> None:
+    """按赛狐口径重算聚合后的 CPC / CVR / ACOS / ROAS。"""
+    for r in rows:
+        clicks = _f(r.get("clicks"))
+        cost = _f(r.get("ad_cost"))
+        orders = _f(r.get("ad_orders"))
+        sales = _f(r.get("ad_sales"))
+        r["cpc"] = round(cost / clicks, 2) if clicks else 0.0
+        r["cvr"] = round(orders / clicks * 100, 2) if clicks else 0.0
+        r["acos"] = round(cost / sales * 100, 2) if sales else 0.0
+        r["roas"] = round(sales / cost, 2) if cost else 0.0
+
+
+def _agg_sort(
+    rows: List[Dict[str, Any]], order_by: str, order_desc: bool, limit: int
+) -> List[Dict[str, Any]]:
+    text_keys = {"search_term", "report_date", "campaign_name", "shop_name"}
+    numeric_keys = {
+        "ad_orders", "ad_cost", "ad_sales", "clicks", "impressions",
+        "acos", "cvr", "cpc", "roas", "suggested_bid", "price",
+    }
+    if order_by in text_keys:
+        rows.sort(key=lambda r: str(r.get(order_by) or ""), reverse=order_desc)
+    else:
+        key = order_by if order_by in numeric_keys else "ad_orders"
+        rows.sort(key=lambda r: _f(r.get(key)), reverse=order_desc)
+    return rows[:max(0, int(limit or 0))]
+
+
+def _agg_dimension(dimension: str) -> Dict[str, str]:
+    if dimension == "asin":
+        return {
+            "table": "ad_search_asin_daily",
+            "keys": "target_asin AS search_term, target_asin AS target_asin",
+            "group": "shop_id, campaign_id, group_id, target_asin, targeting_expression",
+            "extra": (
+                "MAX(targeting_expression) AS targeting_expression, "
+                "MAX(targeting_type) AS targeting_type, "
+                "MAX(match_type) AS match_type, MAX(price) AS price, "
+                "MAX(asin) AS asin, MAX(msku) AS msku, "
+                "MAX(suggested_bid) AS suggested_bid"
+            ),
+            "like": "target_asin, campaign_name, msku",
+            "attach_key": "target_asin",
+        }
+    return {
+        "table": "ad_search_terms_daily",
+        "keys": "search_term",
+        "group": "shop_id, campaign_id, group_id, search_term, match_type",
+        "extra": (
+            "MAX(match_type) AS match_type, MAX(asin) AS asin, "
+            "MAX(msku) AS msku, MAX(suggested_bid) AS suggested_bid, "
+            "MAX(cpc) AS original_cpc"
+        ),
+        "like": "search_term, campaign_name, msku",
+        "attach_key": "search_term",
+    }
+
+
+def _agg_query(
+    dimension: str,
+    shop_id: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    only_orders: bool,
+    keyword: str,
+    order_by: str,
+    order_desc: bool,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    cfg = _agg_dimension(dimension)
+    conn = get_conn()
+    where, params = _agg_filters(
+        shop_id, start_date, end_date, keyword, cfg["like"].split(", ")
+    )
+    sql = (
+        "SELECT shop_id, MAX(shop_name) AS shop_name, "
+        "campaign_id, MAX(campaign_name) AS campaign_name, "
+        "group_id, MAX(group_name) AS group_name, "
+        f"{cfg['keys']}, {cfg['extra']}, "
+        "SUM(impressions) AS impressions, SUM(clicks) AS clicks, "
+        "SUM(ad_cost) AS ad_cost, SUM(ad_orders) AS ad_orders, "
+        "SUM(ad_sales) AS ad_sales, MIN(report_date) AS report_date, "
+        f"'{dimension}' AS dimension "
+        f"FROM {cfg['table']} WHERE {where} GROUP BY {cfg['group']}"
+    )
+    if only_orders:
+        # 区间累计有成交，而不是「某一天有成交」——与赛狐「有成交」筛选项一致
+        sql += " HAVING SUM(ad_orders) >= 1"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    _agg_finish(rows)
+    rows = _agg_sort(rows, order_by, order_desc, limit)
+    return _attach_order_dates(
+        rows, cfg["table"], cfg["attach_key"], shop_id, start_date, end_date
+    )
+
+
+def _agg_count(
+    dimension: str,
+    shop_id: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    only_orders: bool,
+) -> int:
+    cfg = _agg_dimension(dimension)
+    conn = get_conn()
+    where, params = _agg_filters(
+        shop_id, start_date, end_date, "", cfg["like"].split(", ")
+    )
+    sql = (
+        f"SELECT COUNT(*) AS cnt FROM (SELECT 1 FROM {cfg['table']} "
+        f"WHERE {where} GROUP BY {cfg['group']}"
+    )
+    if only_orders:
+        sql += " HAVING SUM(ad_orders) >= 1"
+    sql += ")"
+    row = conn.execute(sql, params).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def query_search_asins(
+    shop_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    only_orders: bool = True,
+    keyword: str = "",
+    order_by: str = "ad_orders",
+    order_desc: bool = True,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """查询「投放产生 ASIN」维度，输出字段与搜索词维度保持一致，前端可复用同一张表。"""
+    conn = get_conn()
+    sql = (
+        "SELECT id, report_date, shop_id, shop_name, campaign_id, campaign_name, "
+        "target_asin AS search_term, target_asin AS target_asin, "
+        "targeting_expression, targeting_type, match_type, "
+        "impressions, clicks, ad_cost, cpc, ad_orders, ad_sales, acos, cvr, "
+        "suggested_bid, price, asin, msku, 'asin' AS dimension "
+        "FROM ad_search_asin_daily WHERE 1=1"
+    )
+    params: List[Any] = []
+    if shop_id:
+        sql += " AND shop_id = ?"
+        params.append(shop_id)
+    if start_date:
+        sql += " AND report_date >= ?"
+        params.append(start_date)
+    if end_date:
+        sql += " AND report_date <= ?"
+        params.append(end_date)
+    if only_orders:
+        sql += " AND ad_orders >= 1"
+    if keyword:
+        sql += " AND (target_asin LIKE ? OR campaign_name LIKE ? OR msku LIKE ?)"
+        kw = f"%{keyword}%"
+        params.extend([kw, kw, kw])
+    allowed = {
+        "ad_orders", "ad_cost", "ad_sales", "clicks", "impressions",
+        "acos", "cvr", "cpc", "suggested_bid", "search_term", "report_date", "price",
+    }
+    if order_by not in allowed:
+        order_by = "ad_orders"
+    sql += f" ORDER BY {order_by} {'DESC' if order_desc else 'ASC'} LIMIT {limit}"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    return _attach_order_dates(
+        rows, "ad_search_asin_daily", "target_asin", shop_id, start_date, end_date
+    )
+
+
+def count_search_asins(
+    shop_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    only_orders: bool = True,
+) -> int:
+    conn = get_conn()
+    sql = "SELECT COUNT(*) AS cnt FROM ad_search_asin_daily WHERE 1=1"
+    params: List[Any] = []
+    if shop_id:
+        sql += " AND shop_id = ?"
+        params.append(shop_id)
+    if start_date:
+        sql += " AND report_date >= ?"
+        params.append(start_date)
+    if end_date:
+        sql += " AND report_date <= ?"
+        params.append(end_date)
+    if only_orders:
+        sql += " AND ad_orders >= 1"
+    return conn.execute(sql, params).fetchone()["cnt"]
 
 
 def query_search_terms(
@@ -354,10 +777,25 @@ def query_search_terms(
     order_by: str = "ad_orders",
     order_desc: bool = True,
     limit: int = 500,
+    dimension: str = "keyword",
+    aggregate: bool = False,
 ) -> List[Dict[str, Any]]:
-    """多维筛选搜索词数据。"""
+    """多维筛选搜索词数据。
+
+    - ``dimension='asin'`` 改查「投放产生 ASIN」维度；
+    - ``aggregate=True`` 把查询区间内的按天明细汇总成一行（对齐赛狐区间报表）。
+    """
+    if aggregate:
+        return _agg_query(
+            dimension, shop_id, start_date, end_date, only_orders,
+            keyword, order_by, order_desc, limit,
+        )
+    if dimension == "asin":
+        return query_search_asins(
+            shop_id, start_date, end_date, only_orders, keyword, order_by, order_desc, limit
+        )
     conn = get_conn()
-    sql = "SELECT * FROM ad_search_terms_daily WHERE 1=1"
+    sql = "SELECT *, 'keyword' AS dimension FROM ad_search_terms_daily WHERE 1=1"
     params: List[Any] = []
 
     if shop_id:
@@ -386,8 +824,10 @@ def query_search_terms(
     sql += f" ORDER BY {order_by} {'DESC' if order_desc else 'ASC'}"
     sql += f" LIMIT {limit}"
 
-    rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    return _attach_order_dates(
+        rows, "ad_search_terms_daily", "search_term", shop_id, start_date, end_date
+    )
 
 
 def count_search_terms(
@@ -395,8 +835,14 @@ def count_search_terms(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     only_orders: bool = True,
+    dimension: str = "keyword",
+    aggregate: bool = False,
 ) -> int:
-    """统计搜索词总数。"""
+    """统计搜索词总数（aggregate=True 时统计聚合后的行数）。"""
+    if aggregate:
+        return _agg_count(dimension, shop_id, start_date, end_date, only_orders)
+    if dimension == "asin":
+        return count_search_asins(shop_id, start_date, end_date, only_orders)
     conn = get_conn()
     sql = "SELECT COUNT(*) as cnt FROM ad_search_terms_daily WHERE 1=1"
     params: List[Any] = []

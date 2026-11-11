@@ -81,6 +81,8 @@ logs/
 #    data/local_store.db 含店铺商品库与每日搜索词报告。
 # ---------------------------------------------------------------------------
 config/sf_cookies.json
+# Cookie 备份（同样含完整登录态，★ 严禁推入仓库 ★）
+config/sf_cookies.json.bak*
 data/local_store.db
 data/local_store.db-wal
 data/local_store.db-shm
@@ -90,3 +92,10 @@ data/chrome-debug-profile/
 
 # 定时任务计划（各人本地时间安排，不共享）
 data/scheduler_config.json
+
+# ---------------------------------------------------------------------------
+# 本地调试临时产物（浏览器截图 / 探针输出 / 临时日志）
+# ---------------------------------------------------------------------------
+_*.log
+_*.png
+_zoom*.html

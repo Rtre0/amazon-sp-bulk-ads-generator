@@ -26,6 +26,7 @@ import datetime
 import json
 import os
 import threading
+import time
 import webbrowser
 from typing import Any, Dict, List, Optional
 
@@ -94,7 +95,21 @@ class RematchRequest(BaseModel):
 class CookieUpdateRequest(BaseModel):
     """Cookie 更新请求。"""
     cookie_str: str
-    merge: bool = True  # 与已有 Cookie 合并，避免只粘贴一部分时冲掉登录态
+    merge: bool = True   # 与已有 Cookie 合并，避免只粘贴一部分时冲掉登录态
+    account_id: str = "" # 空 = 按登录态指纹自动归属（同一账号只更新不新增）
+    label: str = ""      # 账号备注名，如「账号A / 大成组」
+
+
+class AccountCreateRequest(BaseModel):
+    """新增赛狐账号（粘贴该账号的 Cookie）。"""
+    cookie_str: str
+    label: str = ""
+    merge: bool = True
+
+
+class AccountRenameRequest(BaseModel):
+    """重命名账号备注。"""
+    label: str
 
 
 class ShopRegisterRequest(BaseModel):
@@ -108,7 +123,16 @@ class SyncTriggerRequest(BaseModel):
     """手动触发同步请求。"""
     shop_id: str = ""
     target_date: str = ""
-    days: int = 1  # 搜索词回补天数（1 = 仅昨天）
+    days: int = 1        # 搜索词回补天数（1 = 仅昨天）
+    account_id: str = "" # 空 = 当前激活账号
+
+
+class SyncAllAccountsRequest(BaseModel):
+    """全量同步所有赛狐账号。"""
+    kind: str = "search"        # search=搜索词双维度 / product=商品 / both=两者
+    target_date: str = ""
+    days: int = 1
+    account_ids: List[str] = []  # 空 = 全部账号
 
 
 class SearchTermQueryRequest(BaseModel):
@@ -121,6 +145,8 @@ class SearchTermQueryRequest(BaseModel):
     order_by: str = "ad_orders"
     order_desc: bool = True
     limit: int = 500
+    dimension: str = "keyword"   # keyword=用户搜索词 / asin=投放产生 ASIN
+    aggregate: bool = True       # 按查询区间汇总成一行（对齐赛狐区间报表）
 
 
 # ===========================================================================
@@ -182,8 +208,12 @@ def generate_file(payload: ExportRequest):
 # ===========================================================================
 @app.get("/api/shops")
 def get_shops():
-    """获取所有已注册店铺。"""
-    return {"shops": db.list_shops()}
+    """获取所有已注册店铺（带所属账号，便于前端按账号分组）。"""
+    return {
+        "shops": db.list_shops(),
+        "accounts": sf.list_accounts(),
+        "active_account": sf.active_account_id(),
+    }
 
 
 @app.post("/api/shops/register")
@@ -194,24 +224,32 @@ def register_shop(req: ShopRegisterRequest):
 
 
 @app.post("/api/shops/discover")
-def discover_shops():
-    """自动发现当前 Cookie 账号下的全部店铺并写入本地库。
+def discover_shops(account_id: str = ""):
+    """自动发现指定账号（默认当前激活账号）下的全部店铺并写入本地库。
 
     赛狐没有独立的店铺列表接口，改为从广告活动接口返回行的
     ``shopId`` / ``shopName`` 反推；再用商品接口兜底补充。
     """
-    if not sf.has_valid_cookies():
-        raise HTTPException(status_code=401, detail="Cookie 未配置，请先导入赛狐登录态")
-    try:
+    if account_id:
+        if not sf.get_account(account_id):
+            raise HTTPException(status_code=404, detail="账号不存在")
+        with sf.use_account(account_id):
+            if not sf.has_valid_cookies():
+                raise HTTPException(status_code=401, detail="该账号 Cookie 未配置或已失效")
+            found = sync_service.discover_and_register_shops(account_id)
+    else:
+        if not sf.has_valid_cookies():
+            raise HTTPException(status_code=401, detail="Cookie 未配置，请先导入赛狐登录态")
         found = sync_service.discover_and_register_shops()
-        return {
-            "ok": True,
-            "count": len(found),
-            "discovered": found,
-            "shops": db.list_shops(),
-        }
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"自动发现店铺失败：{exc}") from exc
+
+    invalidate_shop_access_cache()
+    return {
+        "ok": True,
+        "count": len(found),
+        "discovered": found,
+        "shops": db.list_shops(),
+        "accounts": sf.list_accounts(),
+    }
 
 
 # ===========================================================================
@@ -219,11 +257,68 @@ def discover_shops():
 # ===========================================================================
 @app.get("/api/cookie/status")
 def cookie_status():
-    """检查 Cookie 状态。"""
+    """检查 Cookie 状态（含多账号摘要）。"""
+    accounts = sf.list_accounts()
     return {
         "valid": sf.has_valid_cookies(),
         "cookie_count": len(sf.load_cookies()),
+        "active_account": sf.active_account_id(),
+        "account_count": len(accounts),
+        "accounts": accounts,
     }
+
+
+# discover_shops() 要翻活动列表，实测一次 12~14 秒；前端首屏和每次切 Tab
+# 都重新探测会太慢，这里做 5 分钟内存缓存。Cookie 一变更立即失效。
+_SHOP_ACCESS_CACHE: Dict[str, Any] = {"ts": 0.0, "payload": None}
+_SHOP_ACCESS_TTL = 300
+
+
+def invalidate_shop_access_cache() -> None:
+    """Cookie 或店铺清单变更后调用，避免账号提示停留在旧结果。"""
+    _SHOP_ACCESS_CACHE["ts"] = 0.0
+    _SHOP_ACCESS_CACHE["payload"] = None
+
+
+@app.get("/api/cookie/shop-access")
+def cookie_shop_access(force: bool = False):
+    """探测当前 Cookie 实际能访问的店铺，并与本地已注册店铺对比。
+
+    赛狐一个账号只对应一批店铺；如果用户把另一个账号的 Cookie 粘进来，
+    同步会静默拉到完全不相干的数据（或报「没有店铺访问权限」）。
+    这个接口让前端能直接把账号串号问题显示出来。
+    """
+    cached = _SHOP_ACCESS_CACHE["payload"]
+    if (not force and cached
+            and time.time() - _SHOP_ACCESS_CACHE["ts"] < _SHOP_ACCESS_TTL):
+        return {**cached, "cached": True}
+
+    today = datetime.date.today()
+    try:
+        found = sf.discover_shops(
+            (today - datetime.timedelta(days=7)).strftime("%Y-%m-%d"),
+            (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+        )
+    except Exception as exc:
+        # 失败结果不缓存，下次还能重试
+        return {"ok": False, "error": str(exc), "accessible": [], "missing": []}
+    accessible = [
+        {"shop_id": str(x["shop_id"]), "shop_name": x["shop_name"]} for x in found
+    ]
+    ids = {x["shop_id"] for x in accessible}
+    missing = [
+        {"shop_id": str(s["shop_id"]), "shop_name": s["shop_name"]}
+        for s in db.list_shops() if str(s["shop_id"]) not in ids
+    ]
+    payload = {
+        "ok": True,
+        "accessible": accessible,
+        "missing": missing,
+        "cookie_count": len(sf.load_cookies()),
+    }
+    _SHOP_ACCESS_CACHE["payload"] = payload
+    _SHOP_ACCESS_CACHE["ts"] = time.time()
+    return {**payload, "cached": False}
 
 
 @app.post("/api/cookie/update")
@@ -239,13 +334,118 @@ def cookie_update(req: CookieUpdateRequest):
             status_code=400,
             detail="没有解析到任何 Cookie。请在开发者工具的「网络 → 标头 → 请求标头」里复制 cookie 那一行的值。",
         )
-    cookies = sf.update_cookies_from_dict(req.cookie_str, merge=req.merge)
+    info = sf.add_account(
+        req.cookie_str, label=req.label,
+        account_id=req.account_id, merge=req.merge,
+    )
+    if not info:
+        raise HTTPException(status_code=400, detail="Cookie 解析失败，未能保存账号")
+    invalidate_shop_access_cache()   # 换账号后必须重新探测
     return {
         "ok": True,
         "parsed": len(parsed),
-        "cookie_count": len(cookies),
-        "has_login": "sf_u" in cookies,
-        "valid": sf.has_valid_cookies(),
+        "cookie_count": info["cookie_count"],
+        "has_login": info["has_login"],
+        "valid": info["valid"],
+        "account": info,
+        "account_count": len(sf.list_accounts()),
+    }
+
+
+# ===========================================================================
+# v2.4 多赛狐账号管理
+# ===========================================================================
+@app.get("/api/accounts")
+def list_accounts():
+    """列出全部赛狐账号（不含 Cookie 明文）。"""
+    accounts = sf.list_accounts()
+    return {
+        "accounts": accounts,
+        "active": sf.active_account_id(),
+        "count": len(accounts),
+    }
+
+
+@app.post("/api/accounts")
+def create_account(req: AccountCreateRequest):
+    """新增一个赛狐账号。
+
+    同一账号重复添加只会更新 Cookie，不会产生重复记录（按登录态指纹识别）。
+    添加后立即探测该账号能访问的店铺，方便确认粘对了没有。
+    """
+    if not sf.parse_cookie_input(req.cookie_str):
+        raise HTTPException(
+            status_code=400,
+            detail="没有解析到任何 Cookie。请复制赛狐页面「网络 → 请求标头 → cookie」的整行值。",
+        )
+    info = sf.add_account(
+        req.cookie_str, label=req.label, merge=req.merge
+    )
+    if not info:
+        raise HTTPException(status_code=400, detail="Cookie 保存失败")
+
+    probe_error = ""
+    try:
+        with sf.use_account(info["id"]):
+            found = sync_service.discover_and_register_shops(info["id"])
+        info = next(
+            (a for a in sf.list_accounts() if a["id"] == info["id"]), info
+        )
+        info["probe_shops"] = len(found)
+    except Exception as exc:  # noqa: BLE001 - 探测失败不影响账号已保存
+        probe_error = str(exc)
+
+    invalidate_shop_access_cache()
+    return {
+        "ok": True,
+        "account": info,
+        "probe_error": probe_error,
+        "accounts": sf.list_accounts(),
+    }
+
+
+@app.post("/api/accounts/{account_id}/activate")
+def activate_account(account_id: str):
+    """切换当前使用的账号（影响单店同步 / 手动查询 / 创建广告）。"""
+    if not sf.set_active_account(account_id):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    invalidate_shop_access_cache()
+    return {"ok": True, "active": account_id}
+
+
+@app.patch("/api/accounts/{account_id}")
+def rename_account(account_id: str, req: AccountRenameRequest):
+    """修改账号备注名。"""
+    if not sf.rename_account(account_id, req.label):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    return {"ok": True, "accounts": sf.list_accounts()}
+
+
+@app.delete("/api/accounts/{account_id}")
+def remove_account(account_id: str):
+    """删除账号（只删本地登录态，不影响赛狐后台）。"""
+    if not sf.delete_account(account_id):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    invalidate_shop_access_cache()
+    return {"ok": True, "accounts": sf.list_accounts()}
+
+
+@app.post("/api/accounts/{account_id}/probe")
+def probe_account(account_id: str):
+    """重新探测某账号能访问的店铺（换绑店铺 / 权限变更后用）。"""
+    if not sf.get_account(account_id):
+        raise HTTPException(status_code=404, detail="账号不存在")
+    try:
+        with sf.use_account(account_id):
+            found = sync_service.discover_and_register_shops(account_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"探测失败：{exc}") from exc
+    invalidate_shop_access_cache()
+    return {
+        "ok": True,
+        "count": len(found),
+        "discovered": found,
+        "accounts": sf.list_accounts(),
     }
 
 
@@ -257,6 +457,7 @@ def cookie_grab():
     """
     try:
         cookies = sf.grab_cookies_via_cdp()
+        invalidate_shop_access_cache()
         return {"ok": True, "cookie_count": len(cookies), "valid": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -358,9 +559,15 @@ def trigger_product_sync(req: SyncTriggerRequest):
         if req.shop_id:
             shop = db.get_shop(req.shop_id)
             shop_name = shop["shop_name"] if shop else ""
-            result = sync_service.sync_products_for_shop(req.shop_id, shop_name)
+            if req.account_id:
+                with sf.use_account(req.account_id):
+                    result = sync_service.sync_products_for_shop(
+                        req.shop_id, shop_name
+                    )
+            else:
+                result = sync_service.sync_products_for_shop(req.shop_id, shop_name)
         else:
-            result = sync_service.sync_products_all_shops()
+            result = sync_service.sync_products_all_shops(req.account_id or "")
         return {"ok": True, "results": result if isinstance(result, list) else [result]}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"同步失败：{exc}")
@@ -381,14 +588,21 @@ def query_search_terms(req: SearchTermQueryRequest):
         order_by=req.order_by,
         order_desc=req.order_desc,
         limit=req.limit,
+        dimension=req.dimension,
+        aggregate=req.aggregate,
     )
     total = db.count_search_terms(
         shop_id=req.shop_id or None,
         start_date=req.start_date or None,
         end_date=req.end_date or None,
         only_orders=req.only_orders,
+        dimension=req.dimension,
+        aggregate=req.aggregate,
     )
-    return {"rows": rows, "total": total, "limit": req.limit}
+    return {
+        "rows": rows, "total": total, "limit": req.limit,
+        "dimension": req.dimension, "aggregate": req.aggregate,
+    }
 
 
 @app.post("/api/sync/search-terms")
@@ -412,17 +626,106 @@ def trigger_search_sync(req: SyncTriggerRequest):
                     (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
                     for i in range(1, days + 1)
                 ]
-            result = [
-                sync_service.sync_search_terms_for_shop(req.shop_id, shop_name, d)
-                for d in dates
-            ]
+            if req.account_id:
+                with sf.use_account(req.account_id):
+                    result = [
+                        sync_service.sync_search_terms_for_shop(
+                            req.shop_id, shop_name, d
+                        )
+                        for d in dates
+                    ]
+            else:
+                result = [
+                    sync_service.sync_search_terms_for_shop(
+                        req.shop_id, shop_name, d
+                    )
+                    for d in dates
+                ]
         else:
             result = sync_service.sync_search_terms_all_shops(
-                req.target_date or None, req.days or 1
+                req.target_date or None, req.days or 1, req.account_id or ""
             )
         return {"ok": True, "results": result if isinstance(result, list) else [result]}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"同步失败：{exc}")
+
+
+# ===========================================================================
+# v2.4 多账号全量同步
+# ===========================================================================
+_ACCOUNT_SYNC: Dict[str, Any] = {
+    "running": False,
+    "kind": "",
+    "started_at": "",
+    "finished_at": "",
+    "accounts": [],
+    "results": [],
+    "error": "",
+}
+
+
+def _run_account_sync(
+    kind: str, target_date: str, days: int, account_ids: List[str]
+) -> None:
+    _ACCOUNT_SYNC.update({
+        "running": True, "kind": kind, "error": "",
+        "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "finished_at": "", "accounts": [], "results": [],
+    })
+    try:
+        out = sync_service.sync_all_accounts(
+            kind=kind,
+            target_date=target_date or None,
+            days=days,
+            account_ids=account_ids or None,
+        )
+        _ACCOUNT_SYNC["accounts"] = out.get("accounts", [])
+        _ACCOUNT_SYNC["results"] = out.get("results", [])
+    except Exception as exc:  # noqa: BLE001 - 后台任务不能把异常抛给线程
+        _ACCOUNT_SYNC["error"] = str(exc)
+    finally:
+        _ACCOUNT_SYNC["running"] = False
+        _ACCOUNT_SYNC["finished_at"] = datetime.datetime.now().isoformat(
+            timespec="seconds"
+        )
+        invalidate_shop_access_cache()
+
+
+@app.post("/api/sync/all-accounts")
+def sync_all_accounts(req: SyncAllAccountsRequest):
+    """一键同步**所有赛狐账号**（后台执行，前端轮询进度）。
+
+    每个账号用自己的 Cookie 探测店铺、拉取数据，互不覆盖。
+    """
+    if _ACCOUNT_SYNC["running"]:
+        return {"ok": False, "message": "已有全量同步任务在跑，请等待完成"}
+    if not sf.list_accounts():
+        raise HTTPException(status_code=400, detail="还没有配置任何赛狐账号")
+    kind = req.kind if req.kind in ("search", "product", "both") else "search"
+    threading.Thread(
+        target=_run_account_sync,
+        args=(
+            kind,
+            req.target_date,
+            max(1, min(int(req.days or 1), 30)),
+            req.account_ids,
+        ),
+        daemon=True,
+    ).start()
+    return {"ok": True, "message": "已在后台开始同步所有账号", "kind": kind}
+
+
+@app.get("/api/sync/all-accounts/status")
+def sync_all_accounts_status():
+    """查询全量同步进度与结果摘要。"""
+    data = dict(_ACCOUNT_SYNC)
+    results = data.get("results") or []
+    data["summary"] = {
+        "accounts": len(data.get("accounts") or []),
+        "rows": len(results),
+        "errors": sum(1 for r in results if r.get("error")),
+    }
+    return data
 
 
 # ===========================================================================

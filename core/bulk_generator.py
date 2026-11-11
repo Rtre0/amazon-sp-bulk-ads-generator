@@ -581,7 +581,9 @@ def generate_manual_keyword_bulk(
 
     每个 campaign 生成一个手动投放活动，行结构：
         Campaign -> [Bidding Adjustment]
-        -> Ad Group -> Product Ad(每个子体一行) -> Keyword(每个关键词一行)
+        -> Ad Group -> Product Ad(每个子体一行) -> Keyword / Product Targeting
+    投放类型支持三种组合：纯关键词、纯 ASIN 商品投放、关键词 + ASIN 混合。
+    「投放产生 ASIN」维度下 keywords 为空、只有 asins，会生成纯商品投放活动。
 
     Args:
         campaigns: 手动广告活动列表，每项格式::
@@ -649,8 +651,21 @@ def generate_manual_keyword_bulk(
             item.get("daily_budget", item.get("assigned_budget", 100.0)), 100.0
         )
         children = item.get("children", [])
-        keywords = item.get("keywords", [])
-        if not children or not keywords:
+        keywords = [
+            kw for kw in (item.get("keywords") or [])
+            if str(kw.get("keyword_text", "") or "").strip()
+        ]
+        # 手动 ASIN 商品投放：先过滤出合法 ASIN 并去重（保持原顺序）。
+        # 「投放产生 ASIN」维度下没有关键词、只有 asins，此时同样要生成活动，
+        # 不能因为 not keywords 就整条跳过，否则导出的是一张空表。
+        valid_asins = list(dict.fromkeys(
+            a for a in (str(x or "").strip().upper()
+                        for x in (item.get("asins") or []))
+            if _ASIN_CODE_RE.match(a)
+        ))
+        if not children:
+            continue
+        if not keywords and not valid_asins:
             continue
 
         campaign_id, ad_group_id = id_plan[idx]
@@ -740,14 +755,8 @@ def generate_manual_keyword_bulk(
         # 6. Product Targeting 行（手动 ASIN 商品投放）
         #    亚马逊 Bulk 允许同一广告组里同时存在 Keyword 与 Product Targeting 行。
         #    表达式必须写成官方受控格式 asin="B0XXXXXXXX"（见 21.2.2 实测）。
-        asins = item.get("asins") or []
         asin_bid = _to_float(item.get("asin_bid", default_bid), default_bid)
-        seen_asins: set = set()
-        for raw_asin in asins:
-            asin = str(raw_asin or "").strip().upper()
-            if not _ASIN_CODE_RE.match(asin) or asin in seen_asins:
-                continue
-            seen_asins.add(asin)
+        for asin in valid_asins:
             rows.append({
                 "产品": "Sponsored Products",
                 "实体层级": "Product Targeting",

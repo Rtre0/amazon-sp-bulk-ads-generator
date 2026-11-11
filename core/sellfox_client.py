@@ -12,7 +12,11 @@
 - ``fetch_product_page`` — 在线商品分页拉取（form 编码，BASE 参数）
 - ``fetch_all_campaigns`` — 活动列表（含全量指标）
 - ``fetch_ad_products`` — 广告产品列表（campaignId → SKU/ASIN 映射）
-- ``fetch_search_terms`` — 搜索词数据（searchQueryType=searchKeyword）
+- ``fetch_search_terms`` — 搜索词数据；同一接口 ``multiple/search/getAllSearchData``
+  通过 ``searchQueryType`` 切换两个维度：
+  ``searchKeyword``（用户搜索词）/ ``searchAsin``（投放产生 ASIN）。
+  ⚠️ pageSize 上限 500，且服务端按 impressions 排序不稳定，翻页会随机漏行；
+  调用方应**按店铺分片**（单店单日 < 500 行，不翻页），见 sync_service。
 - ``fetch_suggested_bid`` — 投放建议竞价
 
 **创建（sellfox_sp_create_api.md）**
@@ -22,10 +26,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import datetime
+import hashlib
 import json
 import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -86,27 +94,327 @@ PRODUCT_BASE_PARAMS: Dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Cookie 管理
+# Cookie 管理（多账号账号池）
 # ---------------------------------------------------------------------------
-def load_cookies() -> Dict[str, str]:
-    """从本地文件加载赛狐 Cookie。"""
+# 一个赛狐账号只能看到自己权限内的店铺。实际业务中常有多套赛狐账号
+# （例如 4 个账号分管不同店铺），Cookie 只存一份的话，每换一个账号就会
+# 把上一个账号的登录态冲掉，同步必然串号。
+#
+# 存储结构（config/sf_cookies.json）::
+#
+#     {
+#       "_version": 2,
+#       "active": "acc_1a2b3c4d",
+#       "accounts": [
+#         {"id": "acc_1a2b3c4d", "label": "账号A",
+#          "cookies": {"sf_u": "..."},
+#          "shops": [{"shop_id": "560591", "shop_name": "大成-JP"}],
+#          "created_at": "...", "updated_at": "...", "last_sync": "..."}
+#       ]
+#     }
+#
+# 兼容旧版：旧文件是扁平 ``{cookie名: 值}``，首次读取时自动包装成
+# 「默认账号」，登录态不丢。
+_STORE_LOCK = threading.RLock()
+
+# 当前请求 / 当前同步任务使用哪个账号。None 表示用 active 账号。
+# 用 ContextVar 而不是全局变量：同步时逐个账号切换，互不干扰。
+_ACCOUNT_CTX: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "sf_account_id", default=None
+)
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _new_account_id(cookies: Dict[str, str]) -> str:
+    """按登录态指纹生成稳定 id，同一账号重复粘贴不会新增记录。"""
+    seed = cookies.get("sf_u") or cookies.get("sf_uid") or ""
+    if not seed:
+        seed = "|".join(f"{k}={cookies[k]}" for k in sorted(cookies))
+    return "acc_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8]
+
+
+def _empty_store() -> Dict[str, Any]:
+    return {"_version": 2, "active": "", "accounts": []}
+
+
+def _normalize_store(data: Any) -> Dict[str, Any]:
+    """把任意历史格式归一成 v2 账号池结构。"""
+    if isinstance(data, dict) and isinstance(data.get("accounts"), list):
+        data.setdefault("_version", 2)
+        data.setdefault("active", "")
+        return data
+
+    # 旧版：扁平 cookie 字典
+    if isinstance(data, dict) and data:
+        cookies = {
+            k: v for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+        if cookies:
+            aid = _new_account_id(cookies)
+            return {
+                "_version": 2,
+                "active": aid,
+                "accounts": [{
+                    "id": aid,
+                    "label": "默认账号",
+                    "cookies": cookies,
+                    "shops": [],
+                    "created_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                    "last_sync": "",
+                }],
+            }
+    return _empty_store()
+
+
+def _load_store() -> Dict[str, Any]:
     if not os.path.exists(COOKIE_FILE):
-        return {}
+        return _empty_store()
     try:
         with open(COOKIE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            return data
-        return {}
     except (json.JSONDecodeError, IOError):
+        return _empty_store()
+
+    store = _normalize_store(data)
+    if store is not data:
+        # 旧版扁平格式：顺手落盘成 v2，避免每次读取都重新迁移
+        try:
+            _save_store(store)
+        except OSError:
+            pass
+    return store
+
+
+def _save_store(store: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
+    tmp = COOKIE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, COOKIE_FILE)   # 原子替换，避免写一半被读到
+
+
+def _public_account(acc: Dict[str, Any], active_id: str = "") -> Dict[str, Any]:
+    """给前端的账号信息（不含 Cookie 明文）。"""
+    cookies = acc.get("cookies") or {}
+    return {
+        "id": acc.get("id", ""),
+        "label": acc.get("label") or "未命名账号",
+        "cookie_count": len(cookies),
+        "has_login": "sf_u" in cookies,
+        "valid": bool(cookies) and (
+            "sf_u" in cookies or any("sf" in k for k in cookies)
+        ),
+        "shops": acc.get("shops") or [],
+        "shop_count": len(acc.get("shops") or []),
+        "active": acc.get("id") == active_id,
+        "created_at": acc.get("created_at", ""),
+        "updated_at": acc.get("updated_at", ""),
+        "last_sync": acc.get("last_sync", ""),
+    }
+
+
+def list_accounts() -> List[Dict[str, Any]]:
+    """返回全部账号（不含 Cookie 明文），按创建时间排序。"""
+    store = _load_store()
+    active = store.get("active") or ""
+    return [_public_account(a, active) for a in store["accounts"]]
+
+
+def active_account_id() -> str:
+    return _load_store().get("active") or ""
+
+
+def get_account(account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """取账号记录。
+
+    ``account_id`` 为空时优先用 ContextVar（同步任务上下文），
+    再退回 active 账号。显式指定了 id 但找不到时返回 ``None``——
+    绝不能静默换成别的账号，否则就是串号。
+    """
+    explicit = account_id or _ACCOUNT_CTX.get()
+    store = _load_store()
+    accounts = store["accounts"]
+
+    if explicit:
+        for a in accounts:
+            if a.get("id") == explicit:
+                return a
+        # 指定的账号不存在（被删了 / id 传错）：绝不回退到别的账号，
+        # 否则就是拿 A 账号的登录态去拉 B 账号的数据。
+        return None
+
+    active = store.get("active")
+    for a in accounts:
+        if a.get("id") == active:
+            return a
+    return accounts[0] if accounts else None
+
+
+@contextlib.contextmanager
+def use_account(account_id: str):
+    """临时切换当前线程/任务使用的账号，退出时自动还原。"""
+    token = _ACCOUNT_CTX.set(account_id)
+    try:
+        yield
+    finally:
+        _ACCOUNT_CTX.reset(token)
+
+
+def load_cookies() -> Dict[str, str]:
+    """加载**当前上下文账号**的 Cookie。"""
+    acc = get_account()
+    if not acc:
         return {}
+    return dict(acc.get("cookies") or {})
 
 
 def save_cookies(cookies: Dict[str, str]) -> None:
-    """保存 Cookie 到本地文件。"""
-    os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cookies, f, ensure_ascii=False, indent=2)
+    """把 Cookie 写回**当前上下文账号**；没有账号时自动建一个。"""
+    with _STORE_LOCK:
+        store = _load_store()
+        aid = _ACCOUNT_CTX.get() or store.get("active")
+        for a in store["accounts"]:
+            if a.get("id") == aid:
+                a["cookies"] = dict(cookies)
+                a["updated_at"] = _now_iso()
+                _save_store(store)
+                return
+        # 没有任何账号 → 用这份 Cookie 建默认账号
+        new_id = _new_account_id(cookies)
+        store["accounts"].append({
+            "id": new_id,
+            "label": "默认账号",
+            "cookies": dict(cookies),
+            "shops": [],
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "last_sync": "",
+        })
+        store["active"] = new_id
+        _save_store(store)
+
+
+def set_active_account(account_id: str) -> bool:
+    with _STORE_LOCK:
+        store = _load_store()
+        if not any(a.get("id") == account_id for a in store["accounts"]):
+            return False
+        store["active"] = account_id
+        _save_store(store)
+        return True
+
+
+def update_account_shops(account_id: str, shops: List[Dict[str, str]]) -> None:
+    """记录某账号能访问的店铺（用于前端分组展示与同步范围校验）。"""
+    with _STORE_LOCK:
+        store = _load_store()
+        for a in store["accounts"]:
+            if a.get("id") == account_id:
+                a["shops"] = [
+                    {"shop_id": str(s.get("shop_id", "")),
+                     "shop_name": str(s.get("shop_name", ""))}
+                    for s in shops if s.get("shop_id")
+                ]
+                a["updated_at"] = _now_iso()
+                _save_store(store)
+                return
+
+
+def mark_account_sync(account_id: str) -> None:
+    with _STORE_LOCK:
+        store = _load_store()
+        for a in store["accounts"]:
+            if a.get("id") == account_id:
+                a["last_sync"] = _now_iso()
+                _save_store(store)
+                return
+
+
+def rename_account(account_id: str, label: str) -> bool:
+    with _STORE_LOCK:
+        store = _load_store()
+        for a in store["accounts"]:
+            if a.get("id") == account_id:
+                a["label"] = (label or "").strip() or a.get("label") or "未命名账号"
+                a["updated_at"] = _now_iso()
+                _save_store(store)
+                return True
+        return False
+
+
+def delete_account(account_id: str) -> bool:
+    with _STORE_LOCK:
+        store = _load_store()
+        before = len(store["accounts"])
+        store["accounts"] = [
+            a for a in store["accounts"] if a.get("id") != account_id
+        ]
+        if len(store["accounts"]) == before:
+            return False
+        if store.get("active") == account_id:
+            store["active"] = (
+                store["accounts"][0]["id"] if store["accounts"] else ""
+            )
+        _save_store(store)
+        return True
+
+
+def add_account(
+    cookie_str: str,
+    label: str = "",
+    account_id: str = "",
+    merge: bool = True,
+) -> Dict[str, Any]:
+    """新增或更新一个赛狐账号，返回账号信息（不含 Cookie 明文）。
+
+    - 不传 ``account_id`` 时按登录态指纹判断：同一账号只会更新，不会重复新增。
+    - ``merge=True`` 时与已有 Cookie 合并，避免只粘了部分 Cookie 把登录态冲掉。
+    """
+    parsed = parse_cookie_input(cookie_str)
+    if not parsed:
+        return {}
+
+    with _STORE_LOCK:
+        store = _load_store()
+        target = None
+        if account_id:
+            target = next(
+                (a for a in store["accounts"] if a.get("id") == account_id), None
+            )
+        if target is None:
+            fingerprint = _new_account_id(parsed)
+            target = next(
+                (a for a in store["accounts"] if a.get("id") == fingerprint), None
+            )
+        if target is None:
+            target = {
+                "id": _new_account_id(parsed),
+                "label": (label or "").strip() or f"账号{len(store['accounts']) + 1}",
+                "cookies": {},
+                "shops": [],
+                "created_at": _now_iso(),
+                "updated_at": _now_iso(),
+                "last_sync": "",
+            }
+            store["accounts"].append(target)
+        else:
+            if (label or "").strip():
+                target["label"] = label.strip()
+
+        cookies = dict(target.get("cookies") or {}) if merge else {}
+        cookies.update(parsed)
+        target["cookies"] = cookies
+        target["updated_at"] = _now_iso()
+
+        if not store.get("active"):
+            store["active"] = target["id"]
+        _save_store(store)
+        return _public_account(target, store.get("active") or "")
 
 
 # Cookie 属性名（不是真正的 cookie，解析时要丢弃）
@@ -201,19 +509,28 @@ def parse_cookie_input(text: str) -> Dict[str, str]:
     return cookies
 
 
-def update_cookies_from_dict(cookie_str: str, merge: bool = True) -> Dict[str, str]:
+def update_cookies_from_dict(
+    cookie_str: str,
+    merge: bool = True,
+    account_id: str = "",
+    label: str = "",
+) -> Dict[str, str]:
     """解析并保存前端粘贴的 Cookie，返回保存后的完整字典。
 
     ``merge=True``（默认）时与已有 Cookie 合并，只覆盖同名的键——
     避免用户只粘贴了部分 Cookie 就把整份登录态冲掉。
+
+    ``account_id`` 为空时按登录态指纹自动归属：同一赛狐账号重复粘贴
+    只会更新原账号，不会新增一条重复记录。
     """
     parsed = parse_cookie_input(cookie_str)
     if not parsed:
         return {}
-    cookies = load_cookies() if merge else {}
-    cookies.update(parsed)
-    save_cookies(cookies)
-    return cookies
+    info = add_account(cookie_str, label=label, account_id=account_id, merge=merge)
+    if not info:
+        return {}
+    with use_account(info["id"]):
+        return load_cookies()
 
 
 def grab_cookies_via_cdp(cdp_url: str = "http://127.0.0.1:9222") -> Dict[str, str]:
@@ -681,29 +998,34 @@ def fetch_ad_products(
 
 
 def fetch_search_terms(
-    shop_id: str,
+    shop_id: Optional[str],
     campaign_ids: List[str],
     start_date: str,
     end_date: str,
     query_type: str = "searchKeyword",
     page_size: int = 500,
-    max_pages: int = 20,
+    max_pages: int = 40,
 ) -> List[Dict[str, Any]]:
-    """拉取搜索词维度数据（自动翻页）。
+    """拉取搜索词 / 投放产生 ASIN 数据（自动翻页）。
 
     对应接口：``POST multiple/search/getAllSearchData``
-    参数 ``searchQueryType = "searchKeyword"`` 获取搜索词维度。
+    - ``searchQueryType = "searchKeyword"`` → 用户搜索词维度
+    - ``searchQueryType = "searchAsin"``    → 投放产生 ASIN 维度（赛狐「投放」页）
 
-    返回行字段：``query``(搜索词), ``matchType``, ``impressions``, ``clicks``,
-    ``adCost``, ``adOrderNum``, ``adSale``, ``acos``, ``cvr``,
-    ``adCostPerClick``(CPC), ``suggested``(建议竞价), ``asin``, ``msku`` 等。
+    ``shop_id=None`` 时**不传 shopIdList**：实测赛狐在显式传 shopIdList 且
+    该店铺不在当前 Cookie 账号下时会返回 ``360000 您没有店铺访问权限``，
+    不传则正常返回全账号数据（行内自带 shopId / shopName，可按店铺分组）。
+
+    返回行字段：``query``(搜索词或 ASIN), ``shopId``, ``shopName``,
+    ``matchType``, ``targetingExpression``, ``queryType``, ``impressions``,
+    ``clicks``, ``adCost``, ``adOrderNum``, ``adSale``, ``acos``, ``cvr``,
+    ``adCostPerClick``(CPC), ``suggested``(建议竞价), ``price`` 等。
     """
     all_rows: List[Dict[str, Any]] = []
     for page in range(1, max_pages + 1):
         body = {
             "orderField": "impressions",
             "orderType": "desc",
-            "shopIdList": [shop_id],
             "campaignIdList": campaign_ids,
             "adType": "sp",
             "searchQueryType": query_type,
@@ -716,7 +1038,17 @@ def fetch_search_terms(
             "fromSingle": True,
             "useAdvanced": False,
         }
+        if shop_id:
+            body["shopIdList"] = [shop_id]
         resp = post_json("multiple/search/getAllSearchData", body)
+        code = resp.get("code")
+        if code not in (0, "0", None):
+            raise RuntimeError(
+                f"赛狐接口返回 {code}: {resp.get('msg')} "
+                f"（店铺={shop_id or '全账号'}, 维度={query_type}）。"
+                "若提示没有店铺访问权限，通常是 Cookie 属于另一个赛狐账号，"
+                "请在「同步与 Cookie 设置」重新粘贴当前赛狐页面所在账号的 Cookie。"
+            )
         rows = _rows(resp)
         if not rows:
             break
@@ -729,7 +1061,28 @@ def fetch_search_terms(
             break
         time.sleep(0.2)
 
-    return all_rows
+    # 赛狐以 ``orderField=impressions`` 排序，大量行 impressions 相同（多为 1），
+    # 排序不稳定会让同一行出现在多个分页里，同时把另一些真实行挤掉。
+    # 实测单日全账号拉 725 行，跨两次请求 unique 分别只有 687 / 587。
+    # 这里做行级去重，保证返回的 fetched 数量是真实去重后的行数；
+    # 彻底避免漏行的办法是调用方按店铺分片（单店单日 < 500 行，不翻页）。
+    return _dedup_rows(all_rows)
+
+
+def _dedup_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按整行内容去重，保持首次出现顺序（应对赛狐分页重复返回）。"""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            key = json.dumps(r, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            key = repr(sorted(r.items(), key=lambda x: str(x[0])))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
 
 
 def fetch_suggested_bid(

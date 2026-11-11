@@ -38,7 +38,9 @@
                                             : 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100']"
                 title="点击前往「同步与 Cookie 设置」">
           <span :class="['w-2 h-2 rounded-full', cookieStatus.valid ? 'bg-emerald-500' : 'bg-rose-500']"></span>
-          {{ cookieStatus.valid ? `Cookie 有效 (${cookieStatus.cookie_count})` : 'Cookie 未配置' }}
+          {{ cookieStatus.valid
+              ? `Cookie 有效 (${cookieStatus.cookie_count})${cookieStatus.account_count > 1 ? ' · ' + cookieStatus.account_count + ' 账号' : ''}`
+              : 'Cookie 未配置' }}
         </button>
 
         <!-- 本地纯净名词词库：条目数 / 一键导入 / 管理 -->
@@ -372,13 +374,35 @@
 
       <!-- 筛选条 -->
       <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5">搜索词筛选</h2>
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5 flex items-center justify-between flex-wrap gap-2">
+          <span class="flex items-center gap-2">
+            搜索词筛选
+            <span class="text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  title="按所选日期区间把同一搜索词/ASIN 的指标汇总成一行，与赛狐区间报表口径一致">
+              区间汇总
+            </span>
+          </span>
+          <span class="flex items-center gap-2 font-normal">
+            <span class="text-[11px] text-slate-500">数据维度</span>
+            <select v-model="mtDimension" @change="onDimensionChange"
+                    class="border border-blue-300 bg-blue-50 text-blue-700 rounded-lg px-2 py-1 text-[11px] font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="keyword">用户搜索词</option>
+              <option value="asin">投放产生 ASIN</option>
+            </select>
+          </span>
+        </h2>
+        <div v-if="cookieMismatch" class="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-700 leading-relaxed">
+          ⚠️ 当前 Cookie 账号<strong>不含「{{ cookieMismatch }}」</strong>，本页显示的是本地旧缓存，新数据拉不下来。
+          请到「同步与 Cookie 设置」重新粘贴<strong>该店铺所属赛狐账号</strong>的 Cookie，再点同步。
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
           <div>
             <label class="block text-xs font-semibold text-slate-600 mb-1">店铺</label>
             <select v-model="mtShopId" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">全部店铺</option>
-              <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">{{ s.shop_name || s.shop_id }}</option>
+              <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">
+                {{ s.shop_name || s.shop_id }}{{ accounts.length > 1 ? ' · ' + accountLabelOfShop(s) : '' }}
+              </option>
             </select>
           </div>
           <div>
@@ -589,17 +613,19 @@
         </div>
 
         <div class="overflow-x-auto max-h-[560px]">
-          <table class="w-full text-left text-xs min-w-[1620px]">
+          <table class="w-full text-left text-xs min-w-[1760px]">
             <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200 sticky top-0 z-10">
               <tr>
                 <th class="p-3 w-10 text-center">
                   <input type="checkbox" :checked="mtAllSelected" @change="toggleSelectAllTerms" class="accent-blue-600 w-4 h-4" />
                 </th>
-                <th class="p-3">搜索词</th>
+                <th class="p-3">{{ mtDimension === 'asin' ? '投放产生 ASIN' : '搜索词' }}</th>
                 <th class="p-3 min-w-[260px]" title="按上方模板生成；每个活动名称都可以单独改，导出/直推用这里最终显示的名字">
                   广告活动名称 <span class="normal-case font-normal text-blue-600">（逐条可改）</span>
                 </th>
-                <th class="p-3" title="该搜索词成交商品的 ASIN，来自搜索词报表">ASIN</th>
+                <th class="p-3" :title="mtDimension === 'asin' ? '赛狐「投放产生 ASIN」报表里的商品页 ASIN，可直接做商品投放' : '该搜索词成交商品的 ASIN，来自搜索词报表'">
+                  {{ mtDimension === 'asin' ? '投放 ASIN' : 'ASIN' }}
+                </th>
                 <th class="p-3 text-center w-20">
                   投 ASIN
                   <div class="mt-1 flex justify-center">
@@ -612,6 +638,7 @@
                 <th class="p-3 text-right">点击</th>
                 <th class="p-3 text-right">花费</th>
                 <th class="p-3 text-right">出单</th>
+                <th class="p-3 text-right whitespace-nowrap" title="该词/ASIN 在查询区间内实际出单的日期（可多天）">出单时间</th>
                 <th class="p-3 text-right">销售额</th>
                 <th class="p-3 text-right">ACOS</th>
                 <th class="p-3 text-right" title="该搜索词在来源活动里的实际点击成本，作为倍数竞价的基准">原始 CPC</th>
@@ -641,14 +668,14 @@
                   </div>
                 </td>
                 <td class="p-3">
-                  <span v-if="r.asin" class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700" :title="'MSKU: ' + (r.msku || '-')">
-                    {{ r.asin }}
+                  <span v-if="asinOf(r)" class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700" :title="'MSKU: ' + (r.msku || '-')">
+                    {{ asinOf(r) }}
                   </span>
                   <span v-else class="text-slate-300">-</span>
                 </td>
                 <td class="p-3 text-center">
-                  <input type="checkbox" v-model="r.target_asin" :disabled="!r.asin"
-                         class="accent-blue-600 w-4 h-4" :title="r.asin ? '把 ' + r.asin + ' 作为商品投放' : '该行没有 ASIN'" />
+                  <input type="checkbox" v-model="r.target_asin" :disabled="!asinOf(r)"
+                         class="accent-blue-600 w-4 h-4" :title="asinOf(r) ? '把 ' + asinOf(r) + ' 作为商品投放' : '该行没有 ASIN'" />
                 </td>
                 <td class="p-3 text-center text-slate-500">{{ r.match_type || '-' }}</td>
                 <td class="p-3 text-right text-slate-600">{{ fmt(r.impressions) }}</td>
@@ -657,10 +684,16 @@
                 <td class="p-3 text-right">
                   <span :class="r.ad_orders > 0 ? 'text-rose-600 font-bold' : 'text-slate-400'">{{ fmt(r.ad_orders) }}</span>
                 </td>
+                <td class="p-3 text-right whitespace-nowrap">
+                  <span v-if="r.order_dates" class="text-[11px] font-medium text-emerald-700" :title="'区间内出单日期：' + r.order_dates">
+                    {{ r.order_dates }}
+                  </span>
+                  <span v-else class="text-slate-300">-</span>
+                </td>
                 <td class="p-3 text-right text-slate-700 font-medium">¥{{ fmt(r.ad_sales) }}</td>
                 <td class="p-3 text-right">
-                  <span :class="Number(r.acos) > 0.5 ? 'text-rose-600' : 'text-slate-500'">
-                    {{ r.acos ? (Number(r.acos) * 100).toFixed(1) + '%' : '-' }}
+                  <span :class="Number(r.acos) > 50 ? 'text-rose-600' : 'text-slate-500'">
+                    {{ r.acos ? Number(r.acos).toFixed(2) + '%' : '-' }}
                   </span>
                 </td>
                 <td class="p-3 text-right text-slate-500">{{ Number(r.cpc) > 0 ? Number(r.cpc).toFixed(1) : '-' }}</td>
@@ -671,14 +704,18 @@
                 <td class="p-3 text-slate-400 truncate max-w-[180px]" :title="r.campaign_name">{{ r.campaign_name }}</td>
               </tr>
               <tr v-if="!mtRows.length">
-                <td colspan="15" class="p-10 text-center text-slate-400">
-                  {{ mtLoading ? '查询中…' : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取' }}
+                <td colspan="16" class="p-10 text-center text-slate-400">
+                  {{ mtLoading ? '查询中…' : (mtDimension === 'asin'
+                      ? '暂无「投放产生 ASIN」数据 — 请先点「⬇ 同步」从赛狐拉取（同步会同时抓搜索词与 ASIN 两个维度）'
+                      : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取') }}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
         <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+          <strong class="text-slate-700">查询结果按所选日期区间汇总</strong>（曝光/点击/花费/订单/销售额求和，CPC/ACOS/CVR 重算），口径与赛狐区间报表一致；
+          「出单时间」列出该词在区间内实际出单的日期（可多天）。<br />
           行内「建议竞价」列可单独改每个关键词的竞价，留空则使用上方统一的
           <strong class="text-slate-700">{{ mtBid }}</strong> JPY；「原始 CPC」列是倍数竞价的基准。
           活动名按上方模板生成并逐条显示在表格里，来源活动末尾的时间戳（如 <span class="font-mono">-20260801 10:21:16.51</span>）会自动去掉；手改过的框会变成<span class="text-amber-700 font-semibold">黄色</span>。
@@ -693,6 +730,137 @@
     <!-- ============ TAB 3：同步与 Cookie 设置 ================= -->
     <!-- ========================================================= -->
     <div v-show="activeTab === 'sync'" class="space-y-5">
+
+      <!-- ============ 多赛狐账号池 ============ -->
+      <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5 flex items-center justify-between">
+          <span class="flex items-center gap-2">
+            赛狐账号池
+            <span class="text-[10px] font-normal px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+              {{ accounts.length }} 个账号
+            </span>
+          </span>
+          <button @click="showAddAccount = !showAddAccount"
+                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors">
+            {{ showAddAccount ? '收起' : '＋ 添加账号' }}
+          </button>
+        </h2>
+
+        <p class="text-[11px] text-slate-500 leading-5 mb-3">
+          一个赛狐账号只能看到<strong class="text-slate-700">自己权限内</strong>的店铺。有多个账号时，把每个账号的 Cookie 分别加进来，
+          点下面的「全量同步」就会<strong class="text-slate-700">逐个账号各拉一遍</strong>，登录态互不覆盖，也不会再串号。
+        </p>
+
+        <!-- 添加账号 -->
+        <div v-if="showAddAccount" class="mb-4 p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+            <input v-model="newAccountLabel" placeholder="账号备注，如：账号A（大成组）"
+                   class="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <textarea v-model="newAccountCookie" rows="3"
+                      placeholder="粘贴该账号的 Cookie（支持整段请求标头 / Copy as cURL / document.cookie）"
+                      class="md:col-span-2 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+          </div>
+          <div class="flex items-center gap-3 mt-2 flex-wrap">
+            <button @click="addAccount" :disabled="!newAccountCookie.trim() || addingAccount"
+                    class="px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ addingAccount ? '保存并探测中…' : '💾 保存并探测店铺' }}
+            </button>
+            <label class="flex items-center gap-1 text-[11px] text-slate-500 cursor-pointer select-none">
+              <input type="checkbox" v-model="newAccountMerge" class="accent-blue-600">
+              同一账号合并更新（推荐）
+            </label>
+            <span v-if="addAccountMsg" :class="['text-[11px] font-medium', addAccountOk ? 'text-emerald-600' : 'text-rose-600']">
+              {{ addAccountMsg }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 账号卡片 -->
+        <div v-if="accounts.length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div v-for="a in accounts" :key="a.id"
+               :class="['border rounded-lg p-3.5 transition-all',
+                        a.active ? 'border-blue-400 bg-blue-50/70 ring-1 ring-blue-200' : 'border-slate-200 bg-slate-50 hover:bg-white hover:shadow-sm']">
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <span class="text-sm font-bold text-slate-800 truncate" :title="a.label">{{ a.label }}</span>
+              <span v-if="a.active" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white font-semibold">当前使用</span>
+              <span v-else class="shrink-0 text-[10px] font-mono text-slate-400">{{ a.id }}</span>
+            </div>
+
+            <div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] mb-2">
+              <span :class="a.valid ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'">
+                {{ a.valid ? '✓ 登录态有效' : '✗ 已失效' }}
+              </span>
+              <span class="text-slate-500">Cookie {{ a.cookie_count }} 条</span>
+              <span class="text-slate-500">店铺 {{ a.shop_count }}</span>
+            </div>
+
+            <div v-if="a.shops && a.shops.length"
+                 class="text-[10px] text-slate-500 leading-4 mb-2 max-h-10 overflow-hidden"
+                 :title="a.shops.map(s => s.shop_name || s.shop_id).join('、')">
+              {{ a.shops.map(s => s.shop_name || s.shop_id).join('、') }}
+            </div>
+            <div v-else class="text-[10px] text-amber-600 mb-2">还没探测到店铺，点「重新探测」</div>
+
+            <div v-if="a.last_sync" class="text-[10px] text-slate-400 mb-2">
+              最后同步 {{ a.last_sync.replace('T', ' ') }}
+            </div>
+
+            <div class="flex flex-wrap gap-1.5">
+              <button v-if="!a.active" @click="activateAccount(a)"
+                      class="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 text-[11px] rounded font-medium transition-colors">
+                设为当前
+              </button>
+              <button @click="probeAccount(a)" :disabled="probingAccount === a.id"
+                      class="px-2.5 py-1 bg-white border border-slate-300 hover:border-emerald-400 hover:text-emerald-600 disabled:opacity-50 text-slate-600 text-[11px] rounded font-medium transition-colors">
+                {{ probingAccount === a.id ? '探测中…' : '重新探测' }}
+              </button>
+              <button @click="renameAccount(a)"
+                      class="px-2.5 py-1 bg-white border border-slate-300 hover:border-slate-400 text-slate-600 text-[11px] rounded font-medium transition-colors">
+                改名
+              </button>
+              <button @click="removeAccount(a)"
+                      class="px-2.5 py-1 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] rounded font-medium transition-colors">
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+        <p v-else class="text-xs text-slate-400 py-3 text-center">
+          还没有账号 — 点右上角「＋ 添加账号」，把第一个赛狐账号的 Cookie 粘进来
+        </p>
+
+        <!-- 全量同步 -->
+        <div class="mt-4 pt-4 border-t border-slate-100">
+          <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <span class="text-xs font-semibold text-slate-700">全量同步（遍历所有账号）</span>
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px] text-slate-500">回补</span>
+              <input type="number" min="1" max="30" v-model.number="allSyncDays"
+                     class="w-16 border border-slate-300 rounded px-2 py-1 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <span class="text-[11px] text-slate-500">天</span>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button @click="syncAllAccounts('search')" :disabled="allSync.running"
+                    class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              全量同步搜索词（双维度）
+            </button>
+            <button @click="syncAllAccounts('product')" :disabled="allSync.running"
+                    class="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              全量同步商品
+            </button>
+            <button @click="syncAllAccounts('both')" :disabled="allSync.running"
+                    class="px-3.5 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              全部（商品 + 搜索词）
+            </button>
+          </div>
+
+          <div v-if="allSync.running" class="mt-2.5 p-2.5 bg-blue-50 border border-blue-200 rounded text-[11px] text-blue-800 leading-5">
+            正在同步… 开始于 {{ (allSync.started_at || '').replace('T', ' ') }}。可以切到别的页面，后台会继续跑。
+          </div>
+          <div v-else-if="allSyncMsg" class="mt-2.5 p-2.5 bg-emerald-50 border border-emerald-200 rounded text-[11px] text-emerald-800 leading-5 whitespace-pre-line">{{ allSyncMsg }}</div>
+        </div>
+      </section>
 
       <!-- Cookie -->
       <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
@@ -763,6 +931,28 @@
               </span>。
               Cookie 过期时（一般几天到几周），重复上面的方式一重新粘贴一次即可。
             </div>
+            <div class="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-[11px] leading-5">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="font-semibold text-slate-700">当前 Cookie 属于哪个赛狐账号</span>
+                <button @click="checkShopAccess" :disabled="checkingAccess"
+                        class="px-2.5 py-1 border border-amber-300 bg-white hover:bg-amber-100 disabled:opacity-50 text-slate-700 text-[11px] font-semibold rounded">
+                  {{ checkingAccess ? '检测中…' : '🔄 检测账号' }}
+                </button>
+              </div>
+              <div v-if="shopAccess && shopAccess.ok">
+                <div class="text-emerald-700">
+                  可访问 {{ shopAccess.accessible.length }} 个店铺：
+                  <span class="font-medium">{{ shopAccess.accessible.map(s => s.shop_name || s.shop_id).join('、') }}</span>
+                </div>
+                <div v-if="shopAccess.missing.length" class="mt-1.5 text-rose-700 font-semibold">
+                  ⚠️ 本地库另有 {{ shopAccess.missing.length }} 个店铺不在此账号下（{{
+                    shopAccess.missing.map(s => s.shop_name || s.shop_id).join('、')
+                  }}），它们的数据拉不下来。若这些店铺属于另一个赛狐账号，请重新粘贴该账号窗口里的 Cookie。
+                </div>
+              </div>
+              <div v-else-if="shopAccess" class="text-rose-700">检测失败：{{ shopAccess.error }}</div>
+              <div v-else class="text-slate-500">{{ checkingAccess ? '正在向赛狐核对…' : '点「检测账号」核对 Cookie 与店铺是否匹配' }}</div>
+            </div>
           </div>
         </div>
       </section>
@@ -780,9 +970,13 @@
         <div v-if="dbShops.length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           <div v-for="s in dbShops" :key="s.shop_id"
                class="border border-slate-200 rounded-lg p-3.5 bg-slate-50 hover:bg-white hover:shadow-sm transition-all">
-            <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center justify-between mb-1">
               <span class="text-sm font-bold text-slate-800">{{ s.shop_name || s.shop_id }}</span>
               <span class="text-[10px] font-mono text-slate-400">{{ s.shop_id }}</span>
+            </div>
+            <div class="text-[10px] text-slate-400 mb-2 truncate"
+                 :title="'所属赛狐账号：' + accountLabelOfShop(s)">
+              🔑 {{ accountLabelOfShop(s) }}
             </div>
             <div class="flex flex-wrap gap-1.5">
               <button @click="syncProducts(s.shop_id)" :disabled="!!syncingShop"
@@ -808,7 +1002,7 @@
           <span class="text-xs font-semibold text-slate-600">搜索词回补天数</span>
           <input type="number" min="1" max="30" v-model.number="syncDays"
                  class="w-20 border border-slate-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          <span class="text-[11px] text-slate-400">1 = 仅昨天（T-1）；最多 30 天。同步全部店铺时按此天数逐日回补。</span>
+          <span class="text-[11px] text-slate-400">1 = 仅昨天（T-1）；最多 30 天。逐日、逐店铺同步，同时抓「用户搜索词」和「投放产生 ASIN」两个维度；天数越多耗时越长。</span>
           <button @click="syncSearchTerms('')" :disabled="!!syncingShop"
                   class="ml-auto px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
             {{ syncingShop === ':s' ? '同步中…' : `⬇ 同步全部店铺最近 ${syncDays} 天` }}
@@ -1436,6 +1630,170 @@
           showToast(`已删除：${ja}`);
         };
 
+        /* ============ 多赛狐账号池 ============ */
+        const accounts = ref([]);
+        const showAddAccount = ref(false);
+        const newAccountLabel = ref('');
+        const newAccountCookie = ref('');
+        const newAccountMerge = ref(true);
+        const addingAccount = ref(false);
+        const addAccountMsg = ref('');
+        const addAccountOk = ref(false);
+        const probingAccount = ref('');
+        const allSync = ref({
+          running: false, kind: '', started_at: '', finished_at: '',
+          accounts: [], results: [], error: '', summary: {}
+        });
+        const allSyncDays = ref(7);
+        const allSyncMsg = ref('');
+        let allSyncTimer = null;
+
+        const loadAccounts = async () => {
+          try {
+            const res = await fetch('/api/accounts');
+            if (!res.ok) return;
+            const d = await res.json();
+            accounts.value = d.accounts || [];
+          } catch (e) { /* 静默 */ }
+        };
+
+        const addAccount = async () => {
+          addingAccount.value = true;
+          addAccountMsg.value = '';
+          try {
+            const res = await fetch('/api/accounts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                cookie_str: newAccountCookie.value,
+                label: newAccountLabel.value.trim(),
+                merge: newAccountMerge.value
+              })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              addAccountOk.value = false;
+              addAccountMsg.value = d.detail || '添加失败';
+              return;
+            }
+            const a = d.account || {};
+            addAccountOk.value = !d.probe_error;
+            addAccountMsg.value = d.probe_error
+              ? `已保存「${a.label}」，但探测店铺失败：${d.probe_error}`
+              : `已保存「${a.label}」，探测到 ${a.shop_count || 0} 个店铺`;
+            accounts.value = d.accounts || accounts.value;
+            newAccountCookie.value = '';
+            await checkCookie();
+            await loadDbShops();
+            await checkShopAccess(true);
+          } catch (e) {
+            addAccountOk.value = false;
+            addAccountMsg.value = '添加失败：' + (e.message || '网络异常');
+          } finally {
+            addingAccount.value = false;
+          }
+        };
+
+        const activateAccount = async (a) => {
+          try {
+            const res = await fetch(`/api/accounts/${a.id}/activate`, { method: 'POST' });
+            if (!res.ok) { showToast('切换失败'); return; }
+            await loadAccounts();
+            await checkCookie();
+            await checkShopAccess(true);
+            showToast(`已切换到「${a.label}」`);
+          } catch (e) { showToast('切换失败：' + (e.message || '网络异常')); }
+        };
+
+        const probeAccount = async (a) => {
+          probingAccount.value = a.id;
+          try {
+            const res = await fetch(`/api/accounts/${a.id}/probe`, { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '探测失败'); return; }
+            accounts.value = d.accounts || accounts.value;
+            await loadDbShops();
+            showToast(`「${a.label}」探测到 ${d.count} 个店铺`);
+          } catch (e) {
+            showToast('探测失败：' + (e.message || '网络异常'));
+          } finally {
+            probingAccount.value = '';
+          }
+        };
+
+        const renameAccount = async (a) => {
+          const v = window.prompt('账号备注名', a.label);
+          if (v === null) return;
+          try {
+            const res = await fetch(`/api/accounts/${a.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ label: v })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '改名失败'); return; }
+            accounts.value = d.accounts || accounts.value;
+          } catch (e) { showToast('改名失败：' + (e.message || '网络异常')); }
+        };
+
+        const removeAccount = async (a) => {
+          if (!window.confirm(`确定删除账号「${a.label}」？\n只删本地登录态，不影响赛狐后台。`)) return;
+          try {
+            const res = await fetch(`/api/accounts/${a.id}`, { method: 'DELETE' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '删除失败'); return; }
+            accounts.value = d.accounts || accounts.value;
+            await checkCookie();
+            showToast('已删除');
+          } catch (e) { showToast('删除失败：' + (e.message || '网络异常')); }
+        };
+
+        const pollAllSync = async () => {
+          try {
+            const res = await fetch('/api/sync/all-accounts/status');
+            const d = await res.json();
+            allSync.value = d;
+            if (d.running) {
+              allSyncTimer = setTimeout(pollAllSync, 3000);
+              return;
+            }
+            const s = d.summary || {};
+            const errs = (d.results || []).filter(r => r.error);
+            allSyncMsg.value = d.error
+              ? `全量同步失败：${d.error}`
+              : `全量同步完成：${s.accounts || 0} 个账号 / ${s.rows || 0} 条结果 / ${s.errors || 0} 条提示`
+                + (errs.length
+                  ? '\n' + errs.slice(0, 8).map(e =>
+                      `⚠️ ${e.account_label ? '[' + e.account_label + '] ' : ''}${e.error}`).join('\n')
+                  : '');
+            await loadAccounts();
+            await checkCookie();
+            await loadDbShops();
+            await checkShopAccess(true);
+          } catch (e) {
+            allSyncTimer = setTimeout(pollAllSync, 5000);
+          }
+        };
+
+        const syncAllAccounts = async (kind) => {
+          if (!accounts.value.length) { showToast('还没有配置账号'); return; }
+          if (allSync.value.running) { showToast('已有同步任务在跑，请稍候'); return; }
+          allSyncMsg.value = '';
+          try {
+            const res = await fetch('/api/sync/all-accounts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind, days: Number(allSyncDays.value) || 1 })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '启动失败'); return; }
+            if (!d.ok) { showToast(d.message || '启动失败'); return; }
+            allSync.value = { ...allSync.value, running: true, started_at: new Date().toISOString() };
+            showToast('已开始后台同步所有账号');
+            pollAllSync();
+          } catch (e) { showToast('启动失败：' + (e.message || '网络异常')); }
+        };
+
         /* ============ Cookie 管理 ============ */
         const cookieStatus = ref({ valid: false, cookie_count: 0 });
         const cookieStr = ref('');
@@ -1452,7 +1810,12 @@
             const res = await fetch('/api/cookie/status');
             if (!res.ok) return;
             const d = await res.json();
-            cookieStatus.value = { valid: !!d.valid, cookie_count: d.cookie_count || 0 };
+            cookieStatus.value = {
+              valid: !!d.valid,
+              cookie_count: d.cookie_count || 0,
+              account_count: d.account_count || 0
+            };
+            if (d.accounts) accounts.value = d.accounts;
           } catch (e) { /* 静默 */ }
         };
 
@@ -1526,6 +1889,18 @@
           }
         };
 
+        // 店铺归属的账号：单店同步必须用该账号的 Cookie，否则会「没有店铺访问权限」
+        const accountIdOfShop = (sid) => {
+          const s = dbShops.value.find(x => String(x.shop_id) === String(sid));
+          return (s && s.account_id) || '';
+        };
+        const accountLabelOfShop = (s) => {
+          if (!s) return '';
+          const a = accounts.value.find(x => x.id === s.account_id);
+          if (a) return a.label;
+          return s.account_id ? s.account_id : '未归属账号';
+        };
+
         const syncProducts = async (sid) => {
           syncingShop.value = sid + ':p';
           syncMsg.value = '';
@@ -1533,7 +1908,7 @@
             const res = await fetch('/api/sync/products', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ shop_id: sid || '' })
+              body: JSON.stringify({ shop_id: sid || '', account_id: accountIdOfShop(sid) })
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { syncMsg.value = d.detail || '商品同步失败'; return; }
@@ -1557,15 +1932,28 @@
             const res = await fetch('/api/sync/search-terms', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ shop_id: sid || '', days: Number(syncDays.value) || 1 })
+              body: JSON.stringify({
+                shop_id: sid || '',
+                days: Number(syncDays.value) || 1,
+                account_id: accountIdOfShop(sid)
+              })
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { syncMsg.value = d.detail || '搜索词同步失败'; return; }
             const rs = d.results || [];
-            const totalRows = rs.reduce((s, r) => s + Number(r.inserted ?? r.rows ?? 0), 0);
-            syncMsg.value = `搜索词同步完成：${rs.length} 次任务，累计入库 ${totalRows} 条\n` +
-              rs.map(r => `${r.shop_name || r.shop_id || ''} ${r.report_date || ''} → ${r.inserted ?? r.rows ?? 0} 条`).join('\n');
-            showToast(`搜索词同步完成，入库 ${totalRows} 条`);
+            const kw = rs.reduce((s, r) => s + Number(r.search_terms_inserted ?? r.inserted ?? 0), 0);
+            const asin = rs.reduce((s, r) => s + Number(r.asin_rows_inserted ?? 0), 0);
+            const errs = rs.filter(r => r.error);
+            syncMsg.value =
+              `搜索词同步完成：${rs.length} 条结果，入库 搜索词 ${kw} 条 / 投放ASIN ${asin} 条\n` +
+              rs.map(r => r.error
+                ? `⚠️ ${r.error}`
+                : `${r.shop_name || r.shop_id || ''} ${r.report_date || ''} → 搜索词 ${r.search_terms_inserted ?? r.inserted ?? 0} 条 / 投放ASIN ${r.asin_rows_inserted ?? 0} 条`
+              ).join('\n');
+            showToast(errs.length
+              ? `同步完成（搜索词 ${kw} / ASIN ${asin}），但有 ${errs.length} 条账号权限提示`
+              : `搜索词同步完成：搜索词 ${kw} 条 / 投放ASIN ${asin} 条`);
+            checkShopAccess();
           } catch (e) {
             syncMsg.value = '搜索词同步失败：' + (e.message || '网络异常');
           } finally {
@@ -1610,14 +1998,67 @@
         const mtNameMode = ref('per_keyword'); // per_keyword | single
         const mtNameMatchMode = ref('new');    // new | source | none
         const mtNameOverrides = ref({});       // { 行 key: 用户手改的活动名 }
+        // 数据维度：keyword=用户搜索词 / asin=赛狐「投放产生 ASIN」
+        const mtDimension = ref('keyword');
+        const shopAccess = ref(null);          // 当前 Cookie 账号实际可访问的店铺
+        const checkingAccess = ref(false);
+        const cookieMismatch = computed(() => {
+          if (!mtShopId.value) return '';
+          const shopNameOf = (sid) => {
+            const s = dbShops.value.find(x => String(x.shop_id) === String(sid));
+            return (s && (s.shop_name || s.shop_id)) || String(sid);
+          };
+
+          // 首选：账号池里已记录「当前账号能访问哪些店铺」→ 本地判断，零延迟。
+          // 添加账号/重新探测时写入，不必每次都等赛狐接口（那个要 12~14 秒）。
+          const active = accounts.value.find(a => a.active);
+          if (active && active.shops && active.shops.length) {
+            const ok = active.shops.some(
+              s => String(s.shop_id) === String(mtShopId.value));
+            return ok ? '' : shopNameOf(mtShopId.value);
+          }
+
+          // 兜底：账号还没探测过店铺时，用接口结果判断
+          if (!shopAccess.value || !shopAccess.value.ok) return '';
+          const hit = (shopAccess.value.missing || [])
+            .find(m => String(m.shop_id) === String(mtShopId.value));
+          return hit ? (hit.shop_name || hit.shop_id) : '';
+        });
+        const checkShopAccess = async (force = false) => {
+          checkingAccess.value = true;
+          try {
+            // 后端有 5 分钟缓存；换账号/换 Cookie 后传 force=true 强制重探
+            const res = await fetch('/api/cookie/shop-access' + (force ? '?force=true' : ''));
+            shopAccess.value = await res.json();
+          } catch (e) {
+            shopAccess.value = { ok: false, error: e.message, accessible: [], missing: [] };
+          } finally {
+            checkingAccess.value = false;
+          }
+        };
+        const onDimensionChange = () => {
+          mtNameOverrides.value = {};
+          mtRows.value = [];
+          mtTotal.value = 0;
+          loadSearchTerms();
+        };
 
         const mtSelected = computed(() => mtRows.value.filter(r => r.selected));
         const mtAllSelected = computed(() =>
           mtRows.value.length > 0 && mtRows.value.every(r => r.selected));
-        const ASIN_RE = /^B0[A-Z0-9]{8}$/i;
+        const ASIN_RE = /^[A-Z0-9]{10}$/i;
         const asinOf = (r) => {
-          const a = String((r && r.asin) || '').trim().toUpperCase();
-          return ASIN_RE.test(a) ? a : '';
+          if (!r) return '';
+          // 「投放产生 ASIN」维度：直接用赛狐报表里的商品页 ASIN 做商品投放。
+          // 注意 r.target_asin 在前端是「是否勾选投放」的布尔值，
+          // 真正的 ASIN 值放在 source_asin（避免同名覆盖）。
+          if (r.dimension === 'asin') {
+            const t = String(r.source_asin || r.search_term || '').trim().toUpperCase();
+            return ASIN_RE.test(t) ? t : '';
+          }
+          // 「用户搜索词」维度：用该词成交的自家商品 ASIN
+          const a = String(r.asin || '').trim().toUpperCase();
+          return /^B0[A-Z0-9]{8}$/i.test(a) ? a : '';
         };
         // 只统计「已勾选搜索词」行：未勾选的行不会生成活动，不应计入实际投放数
         const mtAsinTargetCount = computed(() =>
@@ -1668,6 +2109,7 @@
             .map(v => MATCH_TYPE_SHORT[v]).join('+') || '精准');
 
         const mtMatchSuffix = (r) => {
+          if (mtDimension.value === 'asin') return 'ASIN投放';
           if (mtNameMatchMode.value === 'none') return '';
           if (mtNameMatchMode.value === 'source') return (r && r.match_type) || '';
           const list = mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'];
@@ -1792,16 +2234,26 @@
                 keyword: mtKeyword.value.trim(),
                 order_by: 'ad_orders',
                 order_desc: true,
-                limit: 500
+                limit: 500,
+                dimension: mtDimension.value,
+                aggregate: true
               })
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(d.detail || '查询失败'); return; }
-            mtRows.value = (d.rows || []).map(r => ({
-              ...r,
-              selected: false,
-              target_asin: false   // ASIN 商品投放需逐行主动勾选
-            }));
+            mtRows.value = (d.rows || []).map(r => {
+              // 数据里的 target_asin 是 ASIN 字符串，另存为 source_asin；
+              // r.target_asin 留给「投 ASIN」勾选框使用（布尔）
+              const row = {
+                ...r,
+                source_asin: r.target_asin || r.asin || '',
+                selected: false,
+                target_asin: false
+              };
+              // 「投放产生 ASIN」维度下每行本身就是投放候选，默认勾上
+              if (mtDimension.value === 'asin' && asinOf(row)) row.target_asin = true;
+              return row;
+            });
             mtNameOverrides.value = {};   // 换一批搜索词后，旧的手改名不应残留
             mtTotal.value = d.total || 0;
           } catch (e) {
@@ -1836,8 +2288,9 @@
           if (!selected.length) return [];
           const children = (p.children || []).map(c => ({ msku: c.msku, asin: c.asin }));
           const matchTypes = mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'];
-          // 一个搜索词 × 勾选的每种匹配类型 = 一条 Keyword
-          const kwOf = (r) => matchTypes.map(mt => ({
+          // 一个搜索词 × 勾选的每种匹配类型 = 一条 Keyword；
+          // 「投放产生 ASIN」维度是商品投放，没有关键词/匹配类型，只生成 Product Targeting
+          const kwOf = (r) => mtDimension.value === 'asin' ? [] : matchTypes.map(mt => ({
             keyword_text: r.search_term,
             match_type: mt,
             bid: Number(r.bid) || Number(mtBid.value) || 15
@@ -2023,9 +2476,11 @@
 
         /* ============ 初始化 ============ */
         loadDict();
+        loadAccounts();      // 多账号池
         checkCookie();
         loadDbShops();
         loadSchedStatus(true);
+        checkShopAccess();   // 异步检测当前 Cookie 账号，不阻塞页面
 
         // 定时刷新调度状态（仅同步页可见时）
         setInterval(() => {
@@ -2051,8 +2506,15 @@
           /* Cookie */
           cookieStatus, cookieStr, cookieMerge, savingCookie, cookieMsg, cookieOk, grabbing, grabMsg, grabOk,
           checkCookie, updateCookie, grabCookie,
+          /* 多赛狐账号 */
+          accounts, showAddAccount, newAccountLabel, newAccountCookie, newAccountMerge,
+          addingAccount, addAccountMsg, addAccountOk, probingAccount,
+          allSync, allSyncDays, allSyncMsg, loadAccounts, addAccount,
+          activateAccount, probeAccount, renameAccount, removeAccount,
+          syncAllAccounts, pollAllSync,
           /* 店铺同步 */
           discovering, syncingShop, syncDays, syncMsg, discoverShops, syncProducts, syncSearchTerms,
+          accountIdOfShop, accountLabelOfShop,
           /* 手动广告 */
           mtShopId, mtStartDate, mtEndDate, mtKeyword, mtOnlyOrders, mtRows, mtTotal,
           mtLoading, mtSyncing, mtProducts, mtTargetSku, mtBid, mtDefaultBid,
@@ -2064,6 +2526,8 @@
           nameKeyOf, nameForRow, finalNameForRow, isNameOverridden,
           setNameOverride, clearNameOverride, clearNameOverrides,
           mtNameEditedCount, resetNameTemplate,
+          mtDimension, onDimensionChange, asinOf,
+          shopAccess, checkingAccess, cookieMismatch, checkShopAccess,
           toggleSelectAllTerms, loadSearchTerms, exportManualBulk, createManualViaApi,
           /* 定时任务 */
           schedStatus, schedBusy, schedMsg, loadSchedStatus, toggleScheduler, saveSchedConfig, runJobNow

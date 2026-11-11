@@ -171,10 +171,12 @@ def _summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _job_sync_products() -> Dict[str, Any]:
-    """商品增量同步：拉取全店铺在线商品，仅入库新上架 SKU。"""
-    logger.info("[Scheduler] 开始执行商品增量同步...")
-    results = sync_service.sync_products_all_shops()
+    """商品增量同步：**遍历所有赛狐账号**，各拉各的店铺，仅入库新上架 SKU。"""
+    logger.info("[Scheduler] 开始执行商品增量同步（全部赛狐账号）...")
+    out = sync_service.sync_all_accounts(kind="product")
+    results = out.get("results", [])
     summary = _summarize(results)
+    summary["accounts"] = len(out.get("accounts", []))
     summary["new_inserted"] = sum(int(r.get("new_inserted") or 0) for r in results)
     summary["total_fetched"] = sum(int(r.get("total_fetched") or 0) for r in results)
     logger.info(
@@ -186,10 +188,12 @@ def _job_sync_products() -> Dict[str, Any]:
 
 
 def _job_sync_search_terms() -> Dict[str, Any]:
-    """搜索词每日同步：拉取昨日（T-1）全店铺搜索词报告。"""
-    logger.info("[Scheduler] 开始执行搜索词每日同步...")
-    results = sync_service.sync_search_terms_all_shops()
+    """搜索词每日同步：**遍历所有赛狐账号**，拉取昨日（T-1）双维度报告。"""
+    logger.info("[Scheduler] 开始执行搜索词每日同步（全部赛狐账号）...")
+    out = sync_service.sync_all_accounts(kind="search")
+    results = out.get("results", [])
     summary = _summarize(results)
+    summary["accounts"] = len(out.get("accounts", []))
     summary["search_terms_inserted"] = sum(
         int(r.get("search_terms_inserted") or 0) for r in results
     )
