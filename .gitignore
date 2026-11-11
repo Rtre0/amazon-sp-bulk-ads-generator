@@ -74,3 +74,19 @@ logs/
 .workbuddy-ai/
 .trae/
 .cursor/
+
+# ---------------------------------------------------------------------------
+# 6. v2.0 赛狐 API 凭据与本地数据库（★ 严禁推入仓库 ★）
+#    config/sf_cookies.json 含登录态，泄露 = 他人可操作你的赛狐后台。
+#    data/local_store.db 含店铺商品库与每日搜索词报告。
+# ---------------------------------------------------------------------------
+config/sf_cookies.json
+data/local_store.db
+data/local_store.db-wal
+data/local_store.db-shm
+
+# Chrome 调试专用配置目录（含赛狐登录态，★ 严禁推入仓库 ★）
+data/chrome-debug-profile/
+
+# 定时任务计划（各人本地时间安排，不共享）
+data/scheduler_config.json

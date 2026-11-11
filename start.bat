@@ -36,6 +36,18 @@ if not exist "venv\Scripts\python.exe" (
     echo.
 )
 
+rem ---------- 检查端口占用：自动结束上一次遗留的旧服务 ----------
+set "PORT=8000"
+set "OLDPID="
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%PORT%" ^| findstr "LISTENING"') do set "OLDPID=%%p"
+if defined OLDPID (
+    echo [提示] 检测到旧服务仍在运行 PID=%OLDPID%，正在关闭以便加载最新代码...
+    taskkill /PID %OLDPID% /F >nul 2>&1
+    timeout /t 2 /nobreak >nul
+    echo [OK] 旧服务已关闭
+    echo.
+)
+
 rem ---------- 启动服务 ----------
 echo 正在启动，浏览器会自动打开： http://127.0.0.1:8000
 echo.

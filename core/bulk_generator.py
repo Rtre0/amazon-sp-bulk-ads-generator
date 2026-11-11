@@ -3,9 +3,16 @@
 输出符合亚马逊日本站 Sponsored Products 批量操作模板的单个工作表：
 ``Sponsored Products Campaigns``。
 
-每个父体生成一个自动投放活动，行结构：
+v2.0 新增：支持手动关键词广告的 Bulk 生成。
+
+每种广告类型的行结构：
+    **自动投放**（v1~v10）：
     Campaign -> [Bidding Adjustment(top) -> Bidding Adjustment(product page)]
     -> Ad Group -> Product Ad(每个子体一行) -> Product Targeting(4 组自动匹配)
+
+    **手动关键词投放**（v2.0 新增）：
+    Campaign -> [Bidding Adjustment]
+    -> Ad Group -> Product Ad(每个子体一行) -> Keyword(每个关键词一行)
 
 表头严格对齐亚马逊官方模板 ``AdvertisingBulksheetTemplate-seller.xlsx``
 中「商品推广活动」工作表的 31 列（列名、顺序完全一致），末尾额外追加一列
@@ -535,3 +542,167 @@ def _check_temp_ids(df: "pd.DataFrame") -> List[str]:
             problems.append(f"Ad Group 行的「广告组编号」重复：{dup_ag[:5]}")
 
     return problems
+
+
+# ===========================================================================
+# v2.0 手动关键词广告 Bulk 生成
+# ===========================================================================
+# 关键词匹配类型映射（Bulk 表受控值）
+KEYWORD_MATCH_TYPES = {
+    "exact": "精准匹配",
+    "phrase": "词组匹配",
+    "broad": "广泛匹配",
+}
+
+# Bulk 表「匹配类型」列的受控值（手动关键词行使用）
+MATCH_TYPE_EXACT = "精准匹配"
+MATCH_TYPE_PHRASE = "词组匹配"
+MATCH_TYPE_BROAD = "广泛匹配"
+
+ALLOWED_MATCH_TYPES_BULK = {MATCH_TYPE_EXACT, MATCH_TYPE_PHRASE, MATCH_TYPE_BROAD}
+
+
+def generate_manual_keyword_bulk(
+    campaigns: List[Dict[str, Any]],
+    settings: Dict[str, Any],
+) -> io.BytesIO:
+    """生成手动关键词投放 SP 广告的 Bulk Excel。
+
+    每个 campaign 生成一个手动投放活动，行结构：
+        Campaign -> [Bidding Adjustment]
+        -> Ad Group -> Product Ad(每个子体一行) -> Keyword(每个关键词一行)
+
+    Args:
+        campaigns: 手动广告活动列表，每项格式::
+
+            {
+                "parent_sku": "ff061",
+                "product_name": "陈列架",
+                "children": [{"msku": "...", "asin": "..."}],
+                "keywords": [
+                    {"keyword_text": "dog cage", "match_type": "exact", "bid": 15.0},
+                    ...
+                ],
+                "daily_budget": 100.0,
+                "default_bid": 25.0,
+            }
+
+        settings: 全局配置（bidding_strategy, portfolio_id, start_date 等）。
+    """
+    rows: List[Dict[str, Any]] = []
+    today_str = datetime.datetime.now().strftime("%Y%m%d")
+
+    bidding_strategy = settings.get("bidding_strategy", "Fixed bid")
+    portfolio_id = settings.get("portfolio_id", "") or ""
+    top_adj = _to_float(settings.get("placement_top_pct", 0.0))
+
+    try:
+        start_date: Any = int(today_str)
+    except ValueError:
+        start_date = today_str
+
+    # 临时 ID 预规划
+    id_plan = _plan_temp_ids(campaigns)
+
+    for item in campaigns:
+        parent_sku = item.get("parent_sku", "")
+        prod_name = item.get("product_name", "商品") or "商品"
+        budget = _to_float(
+            item.get("daily_budget", item.get("assigned_budget", 100.0)), 100.0
+        )
+        children = item.get("children", [])
+        keywords = item.get("keywords", [])
+        if not children or not keywords:
+            continue
+
+        campaign_id, ad_group_id = id_plan[str(parent_sku or "")]
+        campaign_name = f"{parent_sku}_{prod_name}_手动_{today_str}"
+        ad_group_name = campaign_name
+        default_bid = _to_float(item.get("default_bid", 25.0), 25.0)
+
+        # 1. Campaign（手动投放）
+        rows.append({
+            "产品": "Sponsored Products",
+            "实体层级": "Campaign",
+            "操作": "Create",
+            "广告活动编号": campaign_id,
+            "广告组合编号": portfolio_id,
+            "广告活动名称": campaign_name,
+            "开始日期": start_date,
+            "投放类型": TARGETING_TYPE_MANUAL,
+            "状态": "enabled",
+            "每日预算": budget,
+            "竞价方案": bidding_strategy,
+        })
+
+        # 2. Bidding Adjustment - 搜索顶部
+        if top_adj > 0:
+            rows.append({
+                "产品": "Sponsored Products",
+                "实体层级": "Bidding Adjustment",
+                "操作": "Create",
+                "广告活动编号": campaign_id,
+                "竞价方案": bidding_strategy,
+                "广告位": PLACEMENT_TOP,
+                "百分比": top_adj,
+            })
+
+        # 3. Ad Group
+        rows.append({
+            "产品": "Sponsored Products",
+            "实体层级": "Ad Group",
+            "操作": "Create",
+            "广告活动编号": campaign_id,
+            "广告组编号": ad_group_id,
+            "广告组名称": ad_group_name,
+            "状态": "enabled",
+            "广告组默认竞价": default_bid,
+        })
+
+        # 4. Product Ad
+        for child in children:
+            rows.append({
+                "产品": "Sponsored Products",
+                "实体层级": "Product Ad",
+                "操作": "Create",
+                "广告活动编号": campaign_id,
+                "广告组编号": ad_group_id,
+                "SKU": child.get("msku", ""),
+                "ASIN": child.get("asin", ""),
+                "状态": "enabled",
+            })
+
+        # 5. Keyword 行（每个关键词一行）
+        for kw in keywords:
+            kw_text = str(kw.get("keyword_text", "") or "").strip()
+            if not kw_text:
+                continue
+            match_type_raw = str(kw.get("match_type", "exact")).lower().strip()
+            match_type_bulk = KEYWORD_MATCH_TYPES.get(match_type_raw, MATCH_TYPE_EXACT)
+            kw_bid = _to_float(kw.get("bid", default_bid), default_bid)
+
+            rows.append({
+                "产品": "Sponsored Products",
+                "实体层级": "Keyword",
+                "操作": "Create",
+                "广告活动编号": campaign_id,
+                "广告组编号": ad_group_id,
+                "状态": "enabled",
+                "竞价": kw_bid,
+                "关键词文本": kw_text,
+                "匹配类型": match_type_bulk,
+            })
+
+    output_df = pd.DataFrame(rows)
+    for col in BULK_COLUMNS:
+        if col not in output_df.columns:
+            output_df[col] = None
+    output_df = output_df[BULK_COLUMNS]
+
+    _validate_output(output_df)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        output_df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+    buffer.seek(0)
+    return buffer

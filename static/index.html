@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>亚马逊 SP 广告批量生成工作台 · 多店铺隔离版</title>
+  <title>亚马逊 SP 广告批量生成工作台 · v2.0 双模块</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <style>
@@ -17,19 +17,29 @@
 <body class="bg-slate-100 text-slate-800 min-h-screen antialiased">
   <div id="app" v-cloak class="max-w-[1440px] mx-auto px-5 py-6">
 
-    <!-- 顶部导航 -->
-    <header class="mb-6 flex flex-wrap gap-4 justify-between items-center bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+    <!-- ================= 顶部导航 ================= -->
+    <header class="mb-4 flex flex-wrap gap-4 justify-between items-center bg-white p-5 rounded-xl shadow-sm border border-slate-200">
       <div>
         <h1 class="text-xl font-bold text-slate-900 flex items-center gap-2.5">
           <span class="w-2.5 h-6 bg-blue-600 rounded-sm"></span>
           亚马逊 SP 广告批量生成工作台
         </h1>
         <p class="text-xs text-slate-500 mt-1.5">
-          店铺隔离 · 纯离线名词库提取品名 · SKU 实时检索 · 等权 / 客单价加权预算池
+          店铺隔离 · 纯离线名词库提取品名 · SKU 实时检索 · 等权 / 客单价加权预算池 · 本地库自动同步
         </p>
       </div>
 
-      <div class="flex items-end gap-3">
+      <div class="flex items-end gap-3 flex-wrap">
+        <!-- Cookie 状态徽章 -->
+        <button @click="activeTab = 'sync'"
+                :class="['flex items-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-semibold mb-0.5 transition-colors',
+                         cookieStatus.valid ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                                            : 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100']"
+                title="点击前往「同步与 Cookie 设置」">
+          <span :class="['w-2 h-2 rounded-full', cookieStatus.valid ? 'bg-emerald-500' : 'bg-rose-500']"></span>
+          {{ cookieStatus.valid ? `Cookie 有效 (${cookieStatus.cookie_count})` : 'Cookie 未配置' }}
+        </button>
+
         <!-- 本地纯净名词词库：条目数 / 一键导入 / 管理 -->
         <div class="flex items-center gap-2.5 bg-slate-100 px-3 py-2 rounded-lg border border-slate-200 mb-0.5">
           <span class="text-xs text-slate-600 whitespace-nowrap">
@@ -43,7 +53,7 @@
           </button>
           <button @click="refreshNameMatching" :disabled="!shopList.length || refreshingNames"
                   class="text-xs text-emerald-700 hover:text-emerald-900 font-semibold underline whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
-                  :title="shopList.length ? '用当前最新词库重新匹配全部已加载商品的原始日文标题（无需重新上传表格）' : '请先上传赛狐导出表'">
+                  :title="shopList.length ? '用当前最新词库重新匹配全部已加载商品的原始日文标题（无需重新加载数据）' : '请先加载商品数据'">
             {{ refreshingNames ? '刷新中…' : '刷新品名匹配' }}
           </button>
           <button @click="openDict"
@@ -52,6 +62,7 @@
             管理
           </button>
         </div>
+
         <div v-if="shopList.length">
           <label class="block text-xs font-semibold text-slate-600 mb-1">当前店铺</label>
           <select v-model="selectedShop" @change="onShopChange"
@@ -62,234 +73,647 @@
       </div>
     </header>
 
-    <!-- 上传区 -->
-    <section
-      @dragover.prevent="dragging = true"
-      @dragleave.prevent="dragging = false"
-      @drop.prevent="onDrop"
-      :class="['bg-white border-2 border-dashed rounded-xl p-7 text-center mb-6 transition-colors',
-               dragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-blue-400']">
-      <input type="file" ref="fileInput" @change="handleFileUpload" class="hidden" accept=".xlsx,.xls" />
-      <button @click="$refs.fileInput.click()"
-              class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg shadow-sm text-sm transition-colors">
-        上传赛狐导出的 Excel 文件
+    <!-- ================= Tab 导航 ================= -->
+    <nav class="mb-5 flex flex-wrap gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
+      <button @click="activeTab = 'auto'"
+              :class="['px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+                       activeTab === 'auto' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
+        🎯 自动广告工作台
       </button>
-      <p class="text-xs text-slate-400 mt-2.5">支持拖拽 · 自动多店铺分类 · 本地名词库提取日文品名（零联网） · 识别父子变体与真实售价</p>
-      <p v-if="fileName" class="mt-2 text-xs text-blue-600 font-medium">已加载：{{ fileName }}</p>
-      <p v-if="loading" class="mt-3 text-sm text-blue-600 animate-pulse">{{ loadingText }}</p>
-      <p v-if="error" class="mt-3 text-sm text-red-600">{{ error }}</p>
-    </section>
+      <button @click="switchTab('manual')"
+              :class="['px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+                       activeTab === 'manual' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
+        🔍 手动广告 · 搜索词拓词
+      </button>
+      <button @click="switchTab('sync')"
+              :class="['px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+                       activeTab === 'sync' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
+        ⚙️ 同步与 Cookie 设置
+      </button>
+    </nav>
 
-    <!-- 主控面板 -->
-    <div v-if="currentShopData" class="space-y-5">
+    <!-- ========================================================= -->
+    <!-- ================= TAB 1：自动广告工作台 ================= -->
+    <!-- ========================================================= -->
+    <div v-show="activeTab === 'auto'">
 
-      <!-- 策略与预算分配 -->
-      <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-        <h2 class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2.5">投放与预算策略</h2>
+      <!-- 数据源条 -->
+      <section class="mb-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+        <span class="text-xs font-bold text-slate-700 whitespace-nowrap">商品数据源</span>
 
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+        <select v-model="selectedDbShopId"
+                class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white min-w-[220px] focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">— 选择本地库店铺 —</option>
+          <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">
+            {{ s.shop_name || s.shop_id }}（{{ s.shop_id }}）
+          </option>
+        </select>
+
+        <button @click="onDbShopChange" :disabled="!selectedDbShopId || loadingDb"
+                class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+          {{ loadingDb ? '读取中…' : '📥 载入本地商品库' }}
+        </button>
+
+        <span class="text-slate-300">|</span>
+
+        <button @click="showExcel = !showExcel"
+                class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-600 text-xs font-medium rounded-lg transition-colors">
+          {{ showExcel ? '收起 Excel 导入' : '📂 或从 Excel 导入' }}
+        </button>
+
+        <span v-if="fileName" class="text-xs text-blue-600 font-medium ml-auto truncate max-w-[380px]" :title="fileName">
+          {{ fileName }}
+        </span>
+        <span v-if="!dbShops.length" class="text-xs text-amber-600 ml-auto">
+          本地库暂无店铺 → 请到「同步与 Cookie 设置」点「自动发现店铺」
+        </span>
+      </section>
+
+      <!-- Excel 上传区（可折叠，v10 原功能） -->
+      <section v-show="showExcel"
+        @dragover.prevent="dragging = true"
+        @dragleave.prevent="dragging = false"
+        @drop.prevent="onDrop"
+        :class="['bg-white border-2 border-dashed rounded-xl p-7 text-center mb-4 transition-colors',
+                 dragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-blue-400']">
+        <input type="file" ref="fileInput" @change="handleFileUpload" class="hidden" accept=".xlsx,.xls" />
+        <button @click="$refs.fileInput.click()"
+                class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg shadow-sm text-sm transition-colors">
+          上传赛狐导出的 Excel 文件
+        </button>
+        <p class="text-xs text-slate-400 mt-2.5">支持拖拽 · 自动多店铺分类 · 本地名词库提取日文品名（零联网） · 识别父子变体与真实售价</p>
+        <p v-if="fileName" class="mt-2 text-xs text-blue-600 font-medium">已加载：{{ fileName }}</p>
+        <p v-if="loading" class="mt-3 text-sm text-blue-600 animate-pulse">{{ loadingText }}</p>
+        <p v-if="error" class="mt-3 text-sm text-red-600">{{ error }}</p>
+      </section>
+
+      <!-- 加载中 / 错误（非 Excel 面板时也显示） -->
+      <div v-if="!showExcel && (loading || error)" class="mb-4">
+        <p v-if="loading" class="text-sm text-blue-600 animate-pulse">{{ loadingText }}</p>
+        <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+      </div>
+
+      <!-- 主控面板 -->
+      <div v-if="currentShopData" class="space-y-5">
+
+        <!-- 策略与预算分配 -->
+        <section class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+          <h2 class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2.5">投放与预算策略</h2>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">竞价策略</label>
+              <select v-model="settings.bidding_strategy" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="Fixed bid">固定竞价 (Fixed bid)</option>
+                <option value="Dynamic bids - down only">仅降低 (Dynamic down)</option>
+                <option value="Dynamic bids - up and down">提高和降低 (Dynamic up &amp; down)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组默认竞价 (JPY)</label>
+              <input type="number" min="0" v-model.number="settings.default_bid" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">搜索顶部 / 商品页面溢价 (%)</label>
+              <div class="flex gap-2">
+                <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" placeholder="Top 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" placeholder="Prod 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <p class="mt-1 text-[11px] leading-4 text-slate-400">填 0 = 不做加成，该广告位加成行不会生成（避免空操作行）。</p>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (紧密/宽泛/同类/关联)</label>
+              <div class="grid grid-cols-4 gap-1.5">
+                <input type="number" v-model.number="settings.bid_close" title="紧密匹配 close-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="number" v-model.number="settings.bid_loose" title="宽泛匹配 loose-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="number" v-model.number="settings.bid_substitutes" title="同类商品 substitutes" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="number" v-model.number="settings.bid_complements" title="关联商品 complements" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组合编号 (可选)</label>
+              <input v-model="settings.portfolio_id" placeholder="留空则不写入" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div class="md:col-span-3 flex flex-wrap items-end gap-x-6 gap-y-2 pb-1">
+              <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" v-model="settings.include_placement" class="accent-blue-600 w-4 h-4" />
+                生成广告位加成行（搜索顶部 / 商品页面）
+              </label>
+              <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" v-model="settings.include_targeting" class="accent-blue-600 w-4 h-4" />
+                生成 4 组自动匹配 Targeting 行（含独立竞价）
+              </label>
+            </div>
+          </div>
+
+          <!-- 预算分配模式 -->
+          <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-6">
+              <span class="text-xs font-bold text-slate-700">预算分配模式：</span>
+              <label class="inline-flex items-center text-xs cursor-pointer">
+                <input type="radio" value="equal" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
+                <span class="ml-1.5 font-medium">等权预算（每个活动相同）</span>
+              </label>
+              <label class="inline-flex items-center text-xs cursor-pointer">
+                <input type="radio" value="weighted" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
+                <span class="ml-1.5 font-medium">客单价加权总预算池</span>
+              </label>
+            </div>
+
+            <div class="flex items-center gap-2.5">
+              <template v-if="budgetMode === 'equal'">
+                <span class="text-xs text-slate-600">单个活动预算：</span>
+                <input type="number" min="0" v-model.number="singleBudgetInput" @input="recalculateBudgets"
+                       class="w-24 border border-slate-300 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <span class="text-xs text-slate-500">JPY</span>
+              </template>
+              <template v-else>
+                <span class="text-xs text-slate-600">已选活动总预算池：</span>
+                <input type="number" min="0" v-model.number="totalPoolBudgetInput" @input="recalculateBudgets"
+                       class="w-28 border border-blue-400 bg-white rounded px-2 py-1.5 text-sm text-right font-bold text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <span class="text-xs text-slate-500">JPY</span>
+              </template>
+            </div>
+          </div>
+          <p v-if="budgetMode === 'weighted' && selectedProducts.length" class="text-[11px] text-slate-500 mt-2">
+            已选 {{ selectedProducts.length }} 个活动 · 合计分配 <strong class="text-blue-600">{{ fmt(assignedTotal) }}</strong> JPY
+            （按客单价占比分配，单活动最低 100 JPY，合计可能略高于预算池）
+          </p>
+        </section>
+
+        <!-- 检索与统计 -->
+        <section class="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200">
+          <div class="flex flex-wrap items-center gap-4">
+            <div class="relative w-64">
+              <input v-model="skuSearchKeyword" placeholder="搜索父 SKU 或品名（如 mj / ff061）..."
+                     class="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <span class="absolute left-2.5 top-1.5 text-slate-400 text-xs">🔍</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-slate-500">排序</span>
+              <select v-model="sortMode" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="sku_asc">父 SKU 升序 (A→Z)</option>
+                <option value="sku_desc">父 SKU 降序 (Z→A)</option>
+                <option value="price_desc">客单价 高→低</option>
+              </select>
+            </div>
+            <div class="text-xs text-slate-500">
+              中位数客单价：<strong class="text-slate-800">¥{{ fmt(currentShopData.median_price) }}</strong> ·
+              当前展示：<strong>{{ filteredProducts.length }}</strong> / {{ currentShopData.products.length }} 个 ·
+              已勾选：<strong class="text-blue-600">{{ selectedProducts.length }}</strong> 个
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button @click="toggleSelectFiltered" :disabled="!filteredProducts.length"
+                    class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
+              {{ isAllFilteredSelected ? '取消勾选当前' : '全选当前结果' }}
+            </button>
+            <button @click="exportBulkExcel" :disabled="selectedProducts.length === 0 || exporting"
+                    class="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+              {{ exporting ? '生成中…' : `导出亚马逊 Bulk Excel (${selectedProducts.length})` }}
+            </button>
+          </div>
+        </section>
+
+        <!-- 商品表 -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs min-w-[980px]">
+              <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200">
+                <tr>
+                  <th class="p-3 w-12 text-center">
+                    <input type="checkbox" :checked="isAllFilteredSelected" @change="toggleSelectFiltered" class="accent-blue-600 w-4 h-4" />
+                  </th>
+                  <th class="p-3 w-14 text-center">图片</th>
+                  <th class="p-3 cursor-pointer select-none hover:text-blue-600 whitespace-nowrap" @click="toggleSkuSort"
+                      :title="'点击切换父 SKU 排序（当前：' + sortLabel + '）'">
+                    父 SKU
+                    <span class="ml-1 text-xs font-bold text-blue-600">{{ skuSortIcon }}</span>
+                  </th>
+                  <th class="p-3">清洗后品名（核心首词中文 · 可编辑）</th>
+                  <th class="p-3 text-center">子体数</th>
+                  <th class="p-3 text-right">客单均价 (JPY)</th>
+                  <th class="p-3 text-center">中位数比率</th>
+                  <th class="p-3 w-36 text-right">分配预算 (JPY)</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="item in filteredProducts" :key="item.parent_sku"
+                    :class="['hover:bg-blue-50/50 transition-colors', item.selected ? '' : 'opacity-45']">
+                  <td class="p-3 text-center">
+                    <input type="checkbox" v-model="item.selected" @change="recalculateBudgets" class="accent-blue-600 w-4 h-4" />
+                  </td>
+                  <td class="p-2 text-center">
+                    <img v-if="item.image_url && !imgErrors[item.parent_sku]" :src="item.image_url" :alt="item.parent_sku"
+                         loading="lazy"
+                         @error="imgErrors[item.parent_sku] = true"
+                         class="w-10 h-10 object-cover rounded border border-slate-200 inline-block bg-white shadow-sm
+                                hover:scale-[2.4] hover:z-50 hover:relative hover:shadow-xl transition-transform duration-150 origin-left cursor-zoom-in" />
+                    <div v-else class="w-10 h-10 bg-slate-100 border border-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 mx-auto">无图</div>
+                  </td>
+                  <td class="p-3 font-bold text-slate-800 whitespace-nowrap">{{ item.parent_sku }}</td>
+                  <td class="p-3">
+                    <div class="flex items-center gap-1.5">
+                      <input v-model="item.product_name"
+                             :title="item.raw_name ? ('原名：' + item.raw_name) : ''"
+                             :class="['border rounded px-2.5 py-1 w-full text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                      isNameManuallyEdited(item) ? 'border-amber-400' : 'border-slate-300']" />
+                      <span v-if="isNameManuallyEdited(item)"
+                            class="shrink-0 text-[10px] text-amber-700 bg-amber-100 border border-amber-300 rounded px-1 py-px whitespace-nowrap"
+                            title="已手动改名，点击「刷新品名匹配」时会保留该值">手动</span>
+                    </div>
+                  </td>
+                  <td class="p-3 text-center font-medium text-slate-600">{{ item.child_count }}</td>
+                  <td class="p-3 text-right font-medium text-slate-700">¥{{ fmt(item.avg_price) }}</td>
+                  <td class="p-3 text-center">
+                    <span :class="item.median_ratio >= 1.0 ? 'text-rose-600 font-bold' : 'text-slate-400'">{{ item.median_ratio }}x</span>
+                  </td>
+                  <td class="p-3 text-right">
+                    <input type="number" min="0" v-model.number="item.assigned_budget"
+                           class="border border-slate-300 rounded px-2 py-1 w-24 text-right text-xs font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </td>
+                </tr>
+                <tr v-if="!filteredProducts.length">
+                  <td colspan="8" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap justify-between gap-2">
+            <span>品名与预算可直接行内修改；切换预算模式会重算已勾选项，手动改过的值会被覆盖。
+              <strong class="text-slate-600">手动改名（标记「手动」）的品名不会被「刷新品名匹配」覆盖。</strong></span>
+            <span v-if="dataSource === 'excel'">
+              表头：第 {{ headerRow }} 行
+              <template v-if="resolvedCols.shop"> · 店铺列：{{ resolvedCols.shop }}</template>
+              <template v-if="resolvedCols.price"> · 价格列：{{ resolvedCols.price }}</template>
+              <template v-if="resolvedCols.image"> · 图片列：{{ resolvedCols.image }}</template>
+              <template v-else> · 未找到图片列</template>
+            </span>
+            <span v-else class="text-emerald-600 font-medium">数据源：本地商品库（SQLite）</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- 空态 -->
+      <section v-if="!currentShopData && !loading" class="text-center text-slate-400 py-16 text-sm">
+        尚未加载数据 — 请选择上方本地库店铺后点「载入本地商品库」，或从 Excel 导入
+      </section>
+    </div>
+
+    <!-- ========================================================= -->
+    <!-- ============ TAB 2：手动广告 · 搜索词拓词 ============== -->
+    <!-- ========================================================= -->
+    <div v-show="activeTab === 'manual'" class="space-y-5">
+
+      <!-- 筛选条 -->
+      <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5">搜索词筛选</h2>
+        <div class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">竞价策略</label>
-            <select v-model="settings.bidding_strategy" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="Fixed bid">固定竞价 (Fixed bid)</option>
-              <option value="Dynamic bids - down only">仅降低 (Dynamic down)</option>
-              <option value="Dynamic bids - up and down">提高和降低 (Dynamic up &amp; down)</option>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">店铺</label>
+            <select v-model="mtShopId" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">全部店铺</option>
+              <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">{{ s.shop_name || s.shop_id }}</option>
             </select>
           </div>
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组默认竞价 (JPY)</label>
-            <input type="number" min="0" v-model.number="settings.default_bid" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <label class="block text-xs font-semibold text-slate-600 mb-1">开始日期</label>
+            <input type="date" v-model="mtStartDate" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">搜索顶部 / 商品页面溢价 (%)</label>
-            <div class="flex gap-2">
-              <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" placeholder="Top 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" placeholder="Prod 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <p class="mt-1 text-[11px] leading-4 text-slate-400">填 0 = 不做加成，该广告位加成行不会生成（避免空操作行）。</p>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">结束日期</label>
+            <input type="date" v-model="mtEndDate" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (紧密/宽泛/同类/关联)</label>
-            <div class="grid grid-cols-4 gap-1.5">
-              <input type="number" v-model.number="settings.bid_close" title="紧密匹配 close-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="number" v-model.number="settings.bid_loose" title="宽泛匹配 loose-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="number" v-model.number="settings.bid_substitutes" title="同类商品 substitutes" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="number" v-model.number="settings.bid_complements" title="关联商品 complements" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">关键词 / 活动 / MSKU</label>
+            <input v-model="mtKeyword" placeholder="模糊搜索…" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div class="flex items-center gap-1.5 pb-2">
+            <input type="checkbox" id="mtOnlyOrders" v-model="mtOnlyOrders" class="accent-blue-600 w-4 h-4" />
+            <label for="mtOnlyOrders" class="text-xs text-slate-600 cursor-pointer">只看有出单</label>
+          </div>
+          <div class="flex gap-2">
+            <button @click="loadSearchTerms" :disabled="mtLoading"
+                    class="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ mtLoading ? '查询中…' : '查询' }}
+            </button>
+            <button @click="syncSearchTerms('')" :disabled="mtSyncing"
+                    class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-600 text-xs font-medium rounded-lg whitespace-nowrap"
+                    :title="'从赛狐拉取最近 ' + syncDays + ' 天搜索词数据'">
+              {{ mtSyncing ? '同步中…' : '⬇ 同步' }}
+            </button>
           </div>
         </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告组合编号 (可选)</label>
-            <input v-model="settings.portfolio_id" placeholder="留空则不写入" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div class="md:col-span-3 flex flex-wrap items-end gap-x-6 gap-y-2 pb-1">
-            <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
-              <input type="checkbox" v-model="settings.include_placement" class="accent-blue-600 w-4 h-4" />
-              生成广告位加成行（搜索顶部 / 商品页面）
-            </label>
-            <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
-              <input type="checkbox" v-model="settings.include_targeting" class="accent-blue-600 w-4 h-4" />
-              生成 4 组自动匹配 Targeting 行（含独立竞价）
-            </label>
-          </div>
-        </div>
-
-        <!-- 预算分配模式 -->
-        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-4">
-          <div class="flex items-center gap-6">
-            <span class="text-xs font-bold text-slate-700">预算分配模式：</span>
-            <label class="inline-flex items-center text-xs cursor-pointer">
-              <input type="radio" value="equal" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
-              <span class="ml-1.5 font-medium">等权预算（每个活动相同）</span>
-            </label>
-            <label class="inline-flex items-center text-xs cursor-pointer">
-              <input type="radio" value="weighted" v-model="budgetMode" @change="recalculateBudgets" class="accent-blue-600" />
-              <span class="ml-1.5 font-medium">客单价加权总预算池</span>
-            </label>
-          </div>
-
-          <div class="flex items-center gap-2.5">
-            <template v-if="budgetMode === 'equal'">
-              <span class="text-xs text-slate-600">单个活动预算：</span>
-              <input type="number" min="0" v-model.number="singleBudgetInput" @input="recalculateBudgets"
-                     class="w-24 border border-slate-300 rounded px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <span class="text-xs text-slate-500">JPY</span>
-            </template>
-            <template v-else>
-              <span class="text-xs text-slate-600">已选活动总预算池：</span>
-              <input type="number" min="0" v-model.number="totalPoolBudgetInput" @input="recalculateBudgets"
-                     class="w-28 border border-blue-400 bg-white rounded px-2 py-1.5 text-sm text-right font-bold text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <span class="text-xs text-slate-500">JPY</span>
-            </template>
-          </div>
-        </div>
-        <p v-if="budgetMode === 'weighted' && selectedProducts.length" class="text-[11px] text-slate-500 mt-2">
-          已选 {{ selectedProducts.length }} 个活动 · 合计分配 <strong class="text-blue-600">{{ fmt(assignedTotal) }}</strong> JPY
-          （按客单价占比分配，单活动最低 100 JPY，合计可能略高于预算池）
-        </p>
       </section>
 
-      <!-- 检索与统计 -->
-      <section class="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200">
-        <div class="flex flex-wrap items-center gap-4">
-          <div class="relative w-64">
-            <input v-model="skuSearchKeyword" placeholder="搜索父 SKU 或品名（如 mj / ff061）..."
-                   class="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <span class="absolute left-2.5 top-1.5 text-slate-400 text-xs">🔍</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="text-xs text-slate-500">排序</span>
-            <select v-model="sortMode" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="sku_asc">父 SKU 升序 (A→Z)</option>
-              <option value="sku_desc">父 SKU 降序 (Z→A)</option>
-              <option value="price_desc">客单价 高→低</option>
+      <!-- 目标商品 + 投放参数 -->
+      <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5">
+          投放目标与参数
+          <span class="text-[11px] font-normal text-slate-400 ml-2">勾选搜索词 → 选定目标父体 → 导出 Bulk 或接口直推</span>
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+          <div class="md:col-span-2">
+            <label class="block text-xs font-semibold text-slate-600 mb-1">目标商品（父 SKU）</label>
+            <select v-model="mtTargetSku" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">— 请选择 —</option>
+              <option v-for="p in mtProducts" :key="p.parent_sku" :value="p.parent_sku">
+                {{ p.parent_sku }} · {{ p.product_name }}（{{ (p.children||[]).length }} 子体）
+              </option>
             </select>
           </div>
-          <div class="text-xs text-slate-500">
-            中位数客单价：<strong class="text-slate-800">¥{{ fmt(currentShopData.median_price) }}</strong> ·
-            当前展示：<strong>{{ filteredProducts.length }}</strong> / {{ currentShopData.products.length }} 个 ·
-            已勾选：<strong class="text-blue-600">{{ selectedProducts.length }}</strong> 个
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">匹配类型</label>
+            <select v-model="mtMatchType" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="exact">精准匹配</option>
+              <option value="phrase">词组匹配</option>
+              <option value="broad">广泛匹配</option>
+            </select>
           </div>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <button @click="toggleSelectFiltered" :disabled="!filteredProducts.length"
-                  class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
-            {{ isAllFilteredSelected ? '取消勾选当前' : '全选当前结果' }}
-          </button>
-          <button @click="exportBulkExcel" :disabled="selectedProducts.length === 0 || exporting"
-                  class="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
-            {{ exporting ? '生成中…' : `导出亚马逊 Bulk Excel (${selectedProducts.length})` }}
-          </button>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">关键词竞价 (JPY)</label>
+            <input type="number" min="0" v-model.number="mtBid" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">广告组默认竞价</label>
+            <input type="number" min="0" v-model.number="mtDefaultBid" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">每日预算 (JPY)</label>
+            <input type="number" min="0" v-model.number="mtDailyBudget" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
         </div>
       </section>
 
-      <!-- 商品表 -->
+      <!-- 搜索词表 -->
       <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs min-w-[980px]">
-            <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200">
+        <div class="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div class="text-xs text-slate-500">
+            共 <strong class="text-slate-800">{{ mtTotal }}</strong> 条匹配 ·
+            已勾选 <strong class="text-blue-600">{{ mtSelected.length }}</strong> 个关键词
+            <span v-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="toggleSelectAllTerms" :disabled="!mtRows.length"
+                    class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
+              {{ mtAllSelected ? '取消全选' : '全选当前结果' }}
+            </button>
+            <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetSku || mtExporting"
+                    class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+              {{ mtExporting ? '生成中…' : '导出手动广告 Bulk' }}
+            </button>
+            <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetSku || mtCreating"
+                    class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
+                    title="直接推送到赛狐后台创建广告活动">
+              {{ mtCreating ? '创建中…' : '⚡ 接口直推创建' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto max-h-[560px]">
+          <table class="w-full text-left text-xs min-w-[1050px]">
+            <thead class="bg-slate-100 text-slate-600 uppercase border-b border-slate-200 sticky top-0 z-10">
               <tr>
-                <th class="p-3 w-12 text-center">
-                  <input type="checkbox" :checked="isAllFilteredSelected" @change="toggleSelectFiltered" class="accent-blue-600 w-4 h-4" />
+                <th class="p-3 w-10 text-center">
+                  <input type="checkbox" :checked="mtAllSelected" @change="toggleSelectAllTerms" class="accent-blue-600 w-4 h-4" />
                 </th>
-                <th class="p-3 w-14 text-center">图片</th>
-                <th class="p-3 cursor-pointer select-none hover:text-blue-600 whitespace-nowrap" @click="toggleSkuSort"
-                    :title="'点击切换父 SKU 排序（当前：' + sortLabel + '）'">
-                  父 SKU
-                  <span class="ml-1 text-xs font-bold text-blue-600">{{ skuSortIcon }}</span>
-                </th>
-                <th class="p-3">清洗后品名（核心首词中文 · 可编辑）</th>
-                <th class="p-3 text-center">子体数</th>
-                <th class="p-3 text-right">客单均价 (JPY)</th>
-                <th class="p-3 text-center">中位数比率</th>
-                <th class="p-3 w-36 text-right">分配预算 (JPY)</th>
+                <th class="p-3">搜索词</th>
+                <th class="p-3 text-center">匹配类型</th>
+                <th class="p-3 text-right">曝光</th>
+                <th class="p-3 text-right">点击</th>
+                <th class="p-3 text-right">花费</th>
+                <th class="p-3 text-right">出单</th>
+                <th class="p-3 text-right">销售额</th>
+                <th class="p-3 text-right">ACOS</th>
+                <th class="p-3 text-right">建议竞价</th>
+                <th class="p-3">来源活动</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="item in filteredProducts" :key="item.parent_sku"
-                  :class="['hover:bg-blue-50/50 transition-colors', item.selected ? '' : 'opacity-45']">
+              <tr v-for="(r, i) in mtRows" :key="i"
+                  :class="['hover:bg-blue-50/50 transition-colors', r.selected ? '' : 'opacity-60']">
                 <td class="p-3 text-center">
-                  <input type="checkbox" v-model="item.selected" @change="recalculateBudgets" class="accent-blue-600 w-4 h-4" />
+                  <input type="checkbox" v-model="r.selected" class="accent-blue-600 w-4 h-4" />
                 </td>
-                <td class="p-2 text-center">
-                  <img v-if="item.image_url && !imgErrors[item.parent_sku]" :src="item.image_url" :alt="item.parent_sku"
-                       loading="lazy"
-                       @error="imgErrors[item.parent_sku] = true"
-                       class="w-10 h-10 object-cover rounded border border-slate-200 inline-block bg-white shadow-sm
-                              hover:scale-[2.4] hover:z-50 hover:relative hover:shadow-xl transition-transform duration-150 origin-left cursor-zoom-in" />
-                  <div v-else class="w-10 h-10 bg-slate-100 border border-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 mx-auto">无图</div>
+                <td class="p-3 font-semibold text-slate-800">{{ r.search_term }}</td>
+                <td class="p-3 text-center text-slate-500">{{ r.match_type || '-' }}</td>
+                <td class="p-3 text-right text-slate-600">{{ fmt(r.impressions) }}</td>
+                <td class="p-3 text-right text-slate-600">{{ fmt(r.clicks) }}</td>
+                <td class="p-3 text-right text-slate-600">¥{{ fmt(r.ad_cost) }}</td>
+                <td class="p-3 text-right">
+                  <span :class="r.ad_orders > 0 ? 'text-rose-600 font-bold' : 'text-slate-400'">{{ fmt(r.ad_orders) }}</span>
                 </td>
-                <td class="p-3 font-bold text-slate-800 whitespace-nowrap">{{ item.parent_sku }}</td>
-                <td class="p-3">
-                  <div class="flex items-center gap-1.5">
-                    <input v-model="item.product_name"
-                           :title="item.raw_name ? ('原名：' + item.raw_name) : ''"
-                           :class="['border rounded px-2.5 py-1 w-full text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500',
-                                    isNameManuallyEdited(item) ? 'border-amber-400' : 'border-slate-300']" />
-                    <span v-if="isNameManuallyEdited(item)"
-                          class="shrink-0 text-[10px] text-amber-700 bg-amber-100 border border-amber-300 rounded px-1 py-px whitespace-nowrap"
-                          title="已手动改名，点击「刷新品名匹配」时会保留该值">手动</span>
-                  </div>
-                </td>
-                <td class="p-3 text-center font-medium text-slate-600">{{ item.child_count }}</td>
-                <td class="p-3 text-right font-medium text-slate-700">¥{{ fmt(item.avg_price) }}</td>
-                <td class="p-3 text-center">
-                  <span :class="item.median_ratio >= 1.0 ? 'text-rose-600 font-bold' : 'text-slate-400'">{{ item.median_ratio }}x</span>
+                <td class="p-3 text-right text-slate-700 font-medium">¥{{ fmt(r.ad_sales) }}</td>
+                <td class="p-3 text-right">
+                  <span :class="Number(r.acos) > 0.5 ? 'text-rose-600' : 'text-slate-500'">
+                    {{ r.acos ? (Number(r.acos) * 100).toFixed(1) + '%' : '-' }}
+                  </span>
                 </td>
                 <td class="p-3 text-right">
-                  <input type="number" min="0" v-model.number="item.assigned_budget"
-                         class="border border-slate-300 rounded px-2 py-1 w-24 text-right text-xs font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input type="number" min="0" v-model.number="r.bid" :placeholder="String(mtBid)"
+                         class="w-20 border border-slate-300 rounded px-1.5 py-1 text-right text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </td>
+                <td class="p-3 text-slate-400 truncate max-w-[180px]" :title="r.campaign_name">{{ r.campaign_name }}</td>
               </tr>
-              <tr v-if="!filteredProducts.length">
-                <td colspan="8" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
+              <tr v-if="!mtRows.length">
+                <td colspan="11" class="p-10 text-center text-slate-400">
+                  {{ mtLoading ? '查询中…' : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取' }}
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap justify-between gap-2">
-          <span>品名与预算可直接行内修改；切换预算模式会重算已勾选项，手动改过的值会被覆盖。
-            <strong class="text-slate-600">手动改名（标记「手动」）的品名不会被「刷新品名匹配」覆盖。</strong></span>
-          <span>
-            表头：第 {{ headerRow }} 行
-            <template v-if="resolvedCols.shop"> · 店铺列：{{ resolvedCols.shop }}</template>
-            <template v-if="resolvedCols.price"> · 价格列：{{ resolvedCols.price }}</template>
-            <template v-if="resolvedCols.image"> · 图片列：{{ resolvedCols.image }}</template>
-            <template v-else> · 未找到图片列</template>
-          </span>
+        <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+          行内「建议竞价」列可单独改每个关键词的竞价，留空则使用上方统一的
+          <strong class="text-slate-700">{{ mtBid }}</strong> JPY。
+          生成结构：Campaign（手动）→ Ad Group → Product Ad（每子体一行）→ Keyword（每关键词一行）。
         </div>
       </section>
     </div>
 
-    <!-- 空态 -->
-    <section v-if="!currentShopData && !loading" class="text-center text-slate-400 py-16 text-sm">
-      尚未加载数据 — 请上传赛狐「在线产品」导出文件开始
-    </section>
+    <!-- ========================================================= -->
+    <!-- ============ TAB 3：同步与 Cookie 设置 ================= -->
+    <!-- ========================================================= -->
+    <div v-show="activeTab === 'sync'" class="space-y-5">
 
-    <!-- 词库管理弹窗 -->
+      <!-- Cookie -->
+      <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5 flex items-center justify-between">
+          <span>赛狐登录态（Cookie）</span>
+          <span :class="['text-xs font-semibold px-2.5 py-1 rounded-full',
+                         cookieStatus.valid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700']">
+            {{ cookieStatus.valid ? `✓ 有效 · ${cookieStatus.cookie_count} 条` : '✗ 未配置 / 已过期' }}
+          </span>
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式一：从已登录的 Chrome 自动抓取（推荐）</label>
+            <p class="text-[11px] text-slate-400 leading-5 mb-2.5">
+              先双击项目根目录的 <span class="font-mono bg-slate-100 px-1 rounded">启动Chrome调试模式.bat</span>，
+              在弹出的 Chrome 里登录赛狐，再点下面的按钮。
+            </p>
+            <button @click="grabCookie" :disabled="grabbing"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+              {{ grabbing ? '抓取中…' : '🔗 从 Chrome 抓取 Cookie' }}
+            </button>
+            <p v-if="grabMsg" :class="['mt-2 text-xs', grabOk ? 'text-emerald-600' : 'text-rose-600']">{{ grabMsg }}</p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式二：手动粘贴 Cookie 字符串</label>
+            <textarea v-model="cookieStr" rows="3" placeholder="从浏览器开发者工具复制 Cookie 请求头，例如：&#10;sf_xxx=abc; sf_yyy=def; ..."
+                      class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            <button @click="updateCookie" :disabled="!cookieStr.trim() || savingCookie"
+                    class="mt-2 px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ savingCookie ? '保存中…' : '保存 Cookie' }}
+            </button>
+            <p v-if="cookieMsg" :class="['mt-2 text-xs', cookieOk ? 'text-emerald-600' : 'text-rose-600']">{{ cookieMsg }}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 店铺 -->
+      <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5 flex items-center justify-between">
+          <span>店铺列表（本地库）</span>
+          <button @click="discoverShops" :disabled="discovering"
+                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+            {{ discovering ? '发现中…' : '🔍 自动发现店铺' }}
+          </button>
+        </h2>
+
+        <div v-if="dbShops.length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <div v-for="s in dbShops" :key="s.shop_id"
+               class="border border-slate-200 rounded-lg p-3.5 bg-slate-50 hover:bg-white hover:shadow-sm transition-all">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-bold text-slate-800">{{ s.shop_name || s.shop_id }}</span>
+              <span class="text-[10px] font-mono text-slate-400">{{ s.shop_id }}</span>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button @click="syncProducts(s.shop_id)" :disabled="!!syncingShop"
+                      class="px-2.5 py-1 bg-white border border-slate-300 hover:border-blue-400 hover:text-blue-600 disabled:opacity-50 text-slate-600 text-[11px] rounded font-medium transition-colors">
+                {{ syncingShop === s.shop_id + ':p' ? '同步中…' : '同步商品' }}
+              </button>
+              <button @click="syncSearchTerms(s.shop_id)" :disabled="!!syncingShop"
+                      class="px-2.5 py-1 bg-white border border-slate-300 hover:border-emerald-400 hover:text-emerald-600 disabled:opacity-50 text-slate-600 text-[11px] rounded font-medium transition-colors">
+                {{ syncingShop === s.shop_id + ':s' ? '同步中…' : '同步搜索词' }}
+              </button>
+              <button @click="loadShopIntoAuto(s.shop_id)"
+                      class="px-2.5 py-1 bg-white border border-slate-300 hover:border-blue-400 hover:text-blue-600 text-slate-600 text-[11px] rounded font-medium transition-colors">
+                载入工作台
+              </button>
+            </div>
+          </div>
+        </div>
+        <p v-else class="text-xs text-slate-400 py-4 text-center">
+          本地库暂无店铺 — 请先配置 Cookie，再点「自动发现店铺」
+        </p>
+
+        <div class="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
+          <span class="text-xs font-semibold text-slate-600">搜索词回补天数</span>
+          <input type="number" min="1" max="30" v-model.number="syncDays"
+                 class="w-20 border border-slate-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <span class="text-[11px] text-slate-400">1 = 仅昨天（T-1）；最多 30 天。同步全部店铺时按此天数逐日回补。</span>
+          <button @click="syncSearchTerms('')" :disabled="!!syncingShop"
+                  class="ml-auto px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+            {{ syncingShop === ':s' ? '同步中…' : `⬇ 同步全部店铺最近 ${syncDays} 天` }}
+          </button>
+        </div>
+        <p v-if="syncMsg" class="mt-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 whitespace-pre-line">{{ syncMsg }}</p>
+      </section>
+
+      <!-- 定时任务 -->
+      <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5 flex items-center justify-between">
+          <span>
+            定时任务调度器
+            <span :class="['ml-2 text-xs font-semibold px-2 py-0.5 rounded-full',
+                           schedStatus.running ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600']">
+              {{ schedStatus.running ? '运行中' : '已停止' }}
+            </span>
+            <span class="ml-1 text-[11px] font-normal text-slate-400">时区 {{ schedStatus.timezone || 'Asia/Tokyo' }}</span>
+          </span>
+          <div class="flex items-center gap-2">
+            <button @click="toggleScheduler" :disabled="schedBusy"
+                    :class="['px-3.5 py-1.5 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors',
+                             schedStatus.running ? 'bg-slate-600 hover:bg-slate-700' : 'bg-emerald-600 hover:bg-emerald-700']">
+              {{ schedStatus.running ? '停止调度器' : '启动调度器' }}
+            </button>
+            <button @click="loadSchedStatus()" class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-600 text-xs rounded-lg">刷新</button>
+          </div>
+        </h2>
+
+        <div class="space-y-3">
+          <div v-for="job in schedStatus.jobs" :key="job.id"
+               class="border border-slate-200 rounded-lg p-4 bg-slate-50">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div class="flex items-center gap-2.5">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" v-model="job.config.enabled" class="accent-blue-600 w-4 h-4" />
+                  <span class="text-sm font-bold text-slate-800">{{ job.name }}</span>
+                </label>
+                <span v-if="job.running"
+                      class="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full animate-pulse">执行中…</span>
+                <span :class="['text-[11px] px-2 py-0.5 rounded-full',
+                               job.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500']">
+                  {{ job.enabled ? '已启用' : '已禁用' }}
+                </span>
+              </div>
+              <button @click="runJobNow(job.id)" :disabled="job.running || schedBusy"
+                      class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+                {{ job.running ? '运行中…' : '▶ 立即执行' }}
+              </button>
+            </div>
+
+            <div class="flex flex-wrap items-end gap-3">
+              <div v-if="job.config.day_of_week !== undefined">
+                <label class="block text-[11px] font-semibold text-slate-500 mb-1">星期</label>
+                <select v-model="job.config.day_of_week"
+                        class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option v-for="d in schedStatus.valid_days" :key="d.value" :value="d.value">{{ d.label }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-500 mb-1">小时</label>
+                <input type="number" min="0" max="23" v-model.number="job.config.hour"
+                       class="w-20 border border-slate-300 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-500 mb-1">分钟</label>
+                <input type="number" min="0" max="59" v-model.number="job.config.minute"
+                       class="w-20 border border-slate-300 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div class="text-[11px] text-slate-500 pb-2">
+                当前计划：<strong class="text-slate-700">{{ job.plan }}</strong>
+                <span v-if="job.next_run_time" class="ml-2">· 下次：<span class="font-mono text-blue-600">{{ job.next_run_time }}</span></span>
+              </div>
+            </div>
+
+            <div v-if="job.last_run || job.last_error" class="mt-3 pt-2.5 border-t border-slate-200 text-[11px] leading-5">
+              <span v-if="job.last_run" class="text-slate-500">上次执行：<span class="font-mono">{{ job.last_run }}</span></span>
+              <span v-if="job.last_result" class="ml-3 text-emerald-700">{{ job.last_result }}</span>
+              <span v-if="job.last_error" class="ml-3 text-rose-600">错误：{{ job.last_error }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 flex items-center gap-3">
+          <button @click="saveSchedConfig" :disabled="schedBusy"
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+            💾 保存同步计划（立即生效）
+          </button>
+          <span class="text-[11px] text-slate-400">保存后自动重新装载任务，无需重启服务。</span>
+          <span v-if="schedMsg" class="text-xs text-emerald-600 font-medium">{{ schedMsg }}</span>
+        </div>
+      </section>
+    </div>
+
+    <!-- ================= 词库管理弹窗（v10 原样） ================= -->
     <div v-if="dictOpen" class="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center p-4" @click.self="dictOpen = false">
       <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[86vh] flex flex-col">
         <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
@@ -350,7 +774,7 @@
     </div>
 
     <transition name="fade">
-      <div v-if="toast" class="fixed bottom-6 right-6 bg-slate-900 text-white text-sm px-5 py-3 rounded-lg shadow-lg">{{ toast }}</div>
+      <div v-if="toast" class="fixed bottom-6 right-6 bg-slate-900 text-white text-sm px-5 py-3 rounded-lg shadow-lg z-[200]">{{ toast }}</div>
     </transition>
   </div>
 
@@ -371,8 +795,18 @@
       include_targeting: true
     });
 
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); };
+
     createApp({
       setup() {
+        /* ============ 通用 ============ */
+        const activeTab = ref('auto');
+        const toast = ref('');
+        const showToast = (m) => { toast.value = m; setTimeout(() => (toast.value = ''), 2800); };
+
+        /* ============ v10 自动广告核心状态（原样保留） ============ */
         const allShopsData = ref({});
         const shopList = ref([]);
         const selectedShop = ref('');
@@ -383,29 +817,6 @@
         const sortMode = ref('sku_asc');   // sku_asc | sku_desc | price_desc
         const imgErrors = ref({});         // 图片加载失败标记 { parent_sku: true }
 
-        // 词库管理
-        const dictOpen = ref(false);
-        const dictSearch = ref('');
-        const dictEntries = ref([]);
-        const dictStats = ref({ count: 0, blacklist_size: 0, path: '' });
-        const dictInput = ref(null);
-        const newEntry = ref({ ja: '', zh: '' });
-
-        // 「手动改名」判定：每个商品记住词库自动生成的名字（_auto_name），
-        // 当前值与自动名不一致即视为用户手动改过 —— 刷新品名时会保留。
-        const isNameManuallyEdited = (item) =>
-          item && item._auto_name !== undefined && item.product_name !== item._auto_name;
-
-        // 跨店铺唯一键（店铺 + 父 SKU）
-        const itemKey = (shop, item) => `${shop}||${item.parent_sku}`;
-
-        const filteredDict = computed(() => {
-          const kw = dictSearch.value.trim().toLowerCase();
-          if (!kw) return dictEntries.value;
-          return dictEntries.value.filter(e =>
-            (e.ja || '').toLowerCase().includes(kw) || (e.zh || '').toLowerCase().includes(kw));
-        });
-
         const fileName = ref('');
         const loading = ref(false);
         const loadingText = ref('');
@@ -413,13 +824,18 @@
         const refreshingNames = ref(false);
         const dragging = ref(false);
         const error = ref('');
-        const toast = ref('');
         const headerRow = ref(1);
         const resolvedCols = ref({});
         const settings = ref(DEFAULT_SETTINGS());
 
+        // 数据源：db = 本地库，excel = 上传文件
+        const dataSource = ref('');
+        const showExcel = ref(false);
+        const dbShops = ref([]);
+        const selectedDbShopId = ref('');
+        const loadingDb = ref(false);
+
         const fmt = (n) => Number(n || 0).toLocaleString('ja-JP');
-        const showToast = (m) => { toast.value = m; setTimeout(() => (toast.value = ''), 2600); };
 
         const currentShopData = computed(() => allShopsData.value[selectedShop.value] || null);
 
@@ -507,6 +923,15 @@
           showToast(`已切换到店铺：${selectedShop.value}`);
         };
 
+        // 「手动改名」判定：每个商品记住词库自动生成的名字（_auto_name），
+        // 当前值与自动名不一致即视为用户手动改过 —— 刷新品名时会保留。
+        const isNameManuallyEdited = (item) =>
+          item && item._auto_name !== undefined && item.product_name !== item._auto_name;
+
+        // 跨店铺唯一键（店铺 + 父 SKU）
+        const itemKey = (shop, item) => `${shop}||${item.parent_sku}`;
+
+        /* ============ 数据加载：Excel（v10 原路径） ============ */
         const analyzeFile = async (file) => {
           if (!file) return;
           error.value = '';
@@ -532,6 +957,7 @@
             shopList.value = Object.keys(allShopsData.value);
             headerRow.value = (json.header_row ?? 0) + 1;
             resolvedCols.value = json.resolved_columns || {};
+            dataSource.value = 'excel';
 
             if (!shopList.value.length) {
               error.value = '未识别到有效商品，请检查文件是否包含 SKU / ASIN / 价格列。';
@@ -557,6 +983,69 @@
           if (f) analyzeFile(f);
         };
 
+        /* ============ 数据加载：本地商品库（v2.0 新增） ============ */
+        const loadShopFromDB = async (sid) => {
+          if (!sid) return;
+          error.value = '';
+          loading.value = true;
+          loadingDb.value = true;
+          loadingText.value = '正在从本地商品库读取（SQLite）…';
+          try {
+            const budget = Number(singleBudgetInput.value) || 100;
+            const res = await fetch(`/api/products/${encodeURIComponent(sid)}/payload?base_budget=${budget}`);
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.detail || '读取本地库失败');
+
+            const shops = json.shops || {};
+            const keys = Object.keys(shops);
+            if (!keys.length) {
+              error.value = '该店铺本地库暂无商品，请到「同步与 Cookie 设置」执行商品同步。';
+              return;
+            }
+            // 合并进 allShopsData（保留其他已加载店铺）
+            keys.forEach(k => { allShopsData.value[k] = shops[k]; });
+            imgErrors.value = {};
+            keys.forEach(shop => {
+              (shops[shop].products || []).forEach(p => {
+                p._shop = shop;
+                p._auto_name = p.product_name;
+              });
+            });
+            shopList.value = Object.keys(allShopsData.value);
+            selectedShop.value = keys[0];
+            dataSource.value = 'db';
+            initShop(selectedShop.value);
+            fileName.value = `本地库 · ${json.shop_name || sid}（${json.total_parents} 个父体）`;
+            showToast(`已从本地库载入 ${json.total_parents} 个父体`);
+          } catch (e) {
+            error.value = e.message || '读取本地库失败';
+          } finally {
+            loading.value = false;
+            loadingDb.value = false;
+          }
+        };
+
+        const onDbShopChange = () => loadShopFromDB(selectedDbShopId.value);
+
+        const loadDbShops = async () => {
+          try {
+            const res = await fetch('/api/shops');
+            if (!res.ok) return;
+            const d = await res.json();
+            dbShops.value = d.shops || [];
+            if (!selectedDbShopId.value && dbShops.value.length) {
+              selectedDbShopId.value = dbShops.value[0].shop_id;
+            }
+          } catch (e) { /* 静默 */ }
+        };
+
+        const loadShopIntoAuto = async (sid) => {
+          activeTab.value = 'auto';
+          selectedDbShopId.value = sid;
+          await loadShopFromDB(sid);
+        };
+
+        /* ============ 导出 Bulk（v10 原路径） ============ */
         const exportBulkExcel = async () => {
           const selected = selectedProducts.value;
           if (!selected.length) return;
@@ -599,7 +1088,21 @@
           }
         };
 
-        // ---- 本地纯净名词词库 ----
+        /* ============ 本地纯净名词词库（v10 原样） ============ */
+        const dictOpen = ref(false);
+        const dictSearch = ref('');
+        const dictEntries = ref([]);
+        const dictStats = ref({ count: 0, blacklist_size: 0, path: '' });
+        const dictInput = ref(null);
+        const newEntry = ref({ ja: '', zh: '' });
+
+        const filteredDict = computed(() => {
+          const kw = dictSearch.value.trim().toLowerCase();
+          if (!kw) return dictEntries.value;
+          return dictEntries.value.filter(e =>
+            (e.ja || '').toLowerCase().includes(kw) || (e.zh || '').toLowerCase().includes(kw));
+        });
+
         const loadDict = async () => {
           try {
             const res = await fetch('/api/dictionary');
@@ -614,7 +1117,6 @@
           } catch (e) { /* 静默 */ }
         };
 
-        // 仅刷新条目数（顶部栏常驻显示）
         const refreshDictCount = async () => {
           try {
             const res = await fetch('/api/dictionary/stats');
@@ -629,7 +1131,6 @@
           await loadDict();
         };
 
-        // 导入 AI 清洗后的纯净中日对照 JSON
         const importDict = async (e) => {
           const file = e.target.files && e.target.files[0];
           if (!file) return;
@@ -647,7 +1148,7 @@
           } catch (err) {
             showToast('导入词库失败，请检查是否为规范的 JSON 格式。');
           } finally {
-            e.target.value = '';   // 允许重复导入同一文件
+            e.target.value = '';
           }
         };
 
@@ -658,12 +1159,10 @@
           showToast(`已从磁盘重载，共 ${d.total_count} 条`);
         };
 
-        // ---- 一键刷新品名匹配（导入新词库后无需重新上传表格）----
-        //   范围：当前已加载的「全部店铺」商品
-        //   规则：手动改过名的商品保留原值，其余按最新词库覆盖
+        // 一键刷新品名匹配（导入新词库后无需重新加载数据）
         const refreshNameMatching = async () => {
           const shops = Object.keys(allShopsData.value);
-          if (!shops.length) { showToast('请先上传赛狐导出表再刷新品名'); return; }
+          if (!shops.length) { showToast('请先加载商品数据再刷新品名'); return; }
 
           const items = [];
           shops.forEach(shop => {
@@ -687,7 +1186,7 @@
             if (!res.ok) { showToast(d.detail || '刷新品名失败'); return; }
 
             const matched = d.matched_names || {};
-            let updated = 0, kept = 0, same = 0, miss = 0;
+            let updated = 0, kept = 0, same = 0;
             shops.forEach(shop => {
               (allShopsData.value[shop].products || []).forEach(p => {
                 const next = matched[itemKey(shop, p)];
@@ -695,11 +1194,11 @@
                 if (isNameManuallyEdited(p)) { kept += 1; return; }   // 保留手动改名
                 if (p.product_name === next) { same += 1; return; }
                 p.product_name = next;
-                p._auto_name = next;                                   // 同步自动名基线
+                p._auto_name = next;
                 updated += 1;
               });
             });
-            miss = d.miss_count || 0;
+            const miss = d.miss_count || 0;
 
             await refreshDictCount();
             let msg = `品名已刷新：更新 ${updated} 个`;
@@ -747,18 +1246,407 @@
           showToast(`已删除：${ja}`);
         };
 
+        /* ============ Cookie 管理 ============ */
+        const cookieStatus = ref({ valid: false, cookie_count: 0 });
+        const cookieStr = ref('');
+        const savingCookie = ref(false);
+        const cookieMsg = ref('');
+        const cookieOk = ref(false);
+        const grabbing = ref(false);
+        const grabMsg = ref('');
+        const grabOk = ref(false);
+
+        const checkCookie = async () => {
+          try {
+            const res = await fetch('/api/cookie/status');
+            if (!res.ok) return;
+            const d = await res.json();
+            cookieStatus.value = { valid: !!d.valid, cookie_count: d.cookie_count || 0 };
+          } catch (e) { /* 静默 */ }
+        };
+
+        const updateCookie = async () => {
+          savingCookie.value = true;
+          cookieMsg.value = '';
+          try {
+            const res = await fetch('/api/cookie/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ cookie_str: cookieStr.value })
+            });
+            const d = await res.json().catch(() => ({}));
+            cookieOk.value = res.ok;
+            cookieMsg.value = res.ok ? `保存成功：共 ${d.cookie_count} 条 Cookie` : (d.detail || '保存失败');
+            if (res.ok) { cookieStr.value = ''; await checkCookie(); }
+          } catch (e) {
+            cookieOk.value = false;
+            cookieMsg.value = '保存失败：' + (e.message || '网络异常');
+          } finally {
+            savingCookie.value = false;
+          }
+        };
+
+        const grabCookie = async () => {
+          grabbing.value = true;
+          grabMsg.value = '';
+          try {
+            const res = await fetch('/api/cookie/grab', { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            grabOk.value = res.ok;
+            grabMsg.value = res.ok
+              ? `抓取成功：共 ${d.cookie_count} 条 Cookie`
+              : (d.detail || '抓取失败');
+            if (res.ok) await checkCookie();
+          } catch (e) {
+            grabOk.value = false;
+            grabMsg.value = '抓取失败：' + (e.message || '网络异常');
+          } finally {
+            grabbing.value = false;
+          }
+        };
+
+        /* ============ 店铺发现 / 手动同步 ============ */
+        const discovering = ref(false);
+        const syncingShop = ref('');
+        const syncDays = ref(1);
+        const syncMsg = ref('');
+
+        const discoverShops = async () => {
+          discovering.value = true;
+          syncMsg.value = '';
+          try {
+            const res = await fetch('/api/shops/discover', { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { syncMsg.value = d.detail || '自动发现失败'; return; }
+            dbShops.value = d.shops || [];
+            syncMsg.value = `发现完成：${d.count} 个店铺`;
+            showToast(`已发现 ${d.count} 个店铺`);
+          } catch (e) {
+            syncMsg.value = '自动发现失败：' + (e.message || '网络异常');
+          } finally {
+            discovering.value = false;
+          }
+        };
+
+        const syncProducts = async (sid) => {
+          syncingShop.value = sid + ':p';
+          syncMsg.value = '';
+          try {
+            const res = await fetch('/api/sync/products', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shop_id: sid || '' })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { syncMsg.value = d.detail || '商品同步失败'; return; }
+            const rs = d.results || [];
+            syncMsg.value = '商品同步完成：\n' + rs.map(r =>
+              `${r.shop_name || r.shop_id || ''} 新增 ${r.inserted ?? 0} / 共 ${r.total ?? 0}`).join('\n');
+            showToast('商品同步完成');
+            await loadDbShops();
+          } catch (e) {
+            syncMsg.value = '商品同步失败：' + (e.message || '网络异常');
+          } finally {
+            syncingShop.value = '';
+          }
+        };
+
+        const syncSearchTerms = async (sid) => {
+          syncingShop.value = (sid || '') + ':s';
+          mtSyncing.value = true;
+          syncMsg.value = '';
+          try {
+            const res = await fetch('/api/sync/search-terms', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shop_id: sid || '', days: Number(syncDays.value) || 1 })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { syncMsg.value = d.detail || '搜索词同步失败'; return; }
+            const rs = d.results || [];
+            const totalRows = rs.reduce((s, r) => s + Number(r.inserted ?? r.rows ?? 0), 0);
+            syncMsg.value = `搜索词同步完成：${rs.length} 次任务，累计入库 ${totalRows} 条\n` +
+              rs.map(r => `${r.shop_name || r.shop_id || ''} ${r.report_date || ''} → ${r.inserted ?? r.rows ?? 0} 条`).join('\n');
+            showToast(`搜索词同步完成，入库 ${totalRows} 条`);
+          } catch (e) {
+            syncMsg.value = '搜索词同步失败：' + (e.message || '网络异常');
+          } finally {
+            syncingShop.value = '';
+            mtSyncing.value = false;
+          }
+        };
+
+        /* ============ 手动广告模块 ============ */
+        const mtShopId = ref('');
+        const mtStartDate = ref(daysAgo(7));
+        const mtEndDate = ref(daysAgo(1));
+        const mtKeyword = ref('');
+        const mtOnlyOrders = ref(true);
+        const mtRows = ref([]);
+        const mtTotal = ref(0);
+        const mtLoading = ref(false);
+        const mtSyncing = ref(false);
+        const mtProducts = ref([]);
+        const mtTargetSku = ref('');
+        const mtMatchType = ref('exact');
+        const mtBid = ref(15);
+        const mtDefaultBid = ref(25);
+        const mtDailyBudget = ref(100);
+        const mtExporting = ref(false);
+        const mtCreating = ref(false);
+
+        const mtSelected = computed(() => mtRows.value.filter(r => r.selected));
+        const mtAllSelected = computed(() =>
+          mtRows.value.length > 0 && mtRows.value.every(r => r.selected));
+
+        const toggleSelectAllTerms = () => {
+          const target = !mtAllSelected.value;
+          mtRows.value.forEach(r => { r.selected = target; });
+        };
+
+        const loadSearchTerms = async () => {
+          mtLoading.value = true;
+          try {
+            const res = await fetch('/api/search-terms/query', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                shop_id: mtShopId.value || '',
+                start_date: mtStartDate.value || '',
+                end_date: mtEndDate.value || '',
+                only_orders: !!mtOnlyOrders.value,
+                keyword: mtKeyword.value.trim(),
+                order_by: 'ad_orders',
+                order_desc: true,
+                limit: 500
+              })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '查询失败'); return; }
+            mtRows.value = (d.rows || []).map(r => ({ ...r, selected: false }));
+            mtTotal.value = d.total || 0;
+          } catch (e) {
+            showToast('查询失败：' + (e.message || '网络异常'));
+          } finally {
+            mtLoading.value = false;
+          }
+        };
+
+        // 载入手动广告可选商品（复用本地库 payload 结构）
+        const loadManualProducts = async () => {
+          const sid = mtShopId.value || selectedDbShopId.value ||
+                      (dbShops.value[0] && dbShops.value[0].shop_id) || '';
+          if (!sid) { mtProducts.value = []; return; }
+          try {
+            const res = await fetch(`/api/products/${encodeURIComponent(sid)}/payload?base_budget=100`);
+            if (!res.ok) return;
+            const d = await res.json();
+            const shops = d.shops || {};
+            const first = Object.keys(shops)[0];
+            mtProducts.value = first ? (shops[first].products || []) : [];
+            if (!mtTargetSku.value && mtProducts.value.length) {
+              mtTargetSku.value = mtProducts.value[0].parent_sku;
+            }
+          } catch (e) { /* 静默 */ }
+        };
+
+        const buildManualCampaigns = () => {
+          const p = mtProducts.value.find(x => x.parent_sku === mtTargetSku.value);
+          if (!p) return [];
+          const kws = mtSelected.value.map(r => ({
+            keyword_text: r.search_term,
+            match_type: mtMatchType.value,
+            bid: Number(r.bid) || Number(mtBid.value) || 15
+          }));
+          if (!kws.length) return [];
+          return [{
+            parent_sku: p.parent_sku,
+            product_name: p.product_name,
+            children: (p.children || []).map(c => ({ msku: c.msku, asin: c.asin })),
+            keywords: kws,
+            daily_budget: Number(mtDailyBudget.value) || 100,
+            default_bid: Number(mtDefaultBid.value) || 25
+          }];
+        };
+
+        const exportManualBulk = async () => {
+          const campaigns = buildManualCampaigns();
+          if (!campaigns.length) { showToast('请先选择目标商品并勾选搜索词'); return; }
+          mtExporting.value = true;
+          try {
+            const res = await fetch('/api/manual-ads/export-bulk', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ campaigns, settings: settings.value })
+            });
+            if (!res.ok) {
+              const j = await res.json().catch(() => ({}));
+              throw new Error(j.detail || '生成失败');
+            }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            a.href = url;
+            a.download = `${mtTargetSku.value || 'manual'}_SP_Bulk_Manual_${today}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast(`已导出手动广告 Bulk（${mtSelected.value.length} 个关键词）`);
+          } catch (e) {
+            showToast('导出失败：' + (e.message || '网络异常'));
+          } finally {
+            mtExporting.value = false;
+          }
+        };
+
+        const createManualViaApi = async () => {
+          const campaigns = buildManualCampaigns();
+          if (!campaigns.length) { showToast('请先选择目标商品并勾选搜索词'); return; }
+          const sid = mtShopId.value || selectedDbShopId.value ||
+                      (dbShops.value[0] && dbShops.value[0].shop_id) || '';
+          if (!sid) { showToast('请先选择店铺'); return; }
+          mtCreating.value = true;
+          try {
+            const res = await fetch('/api/manual-ads/create-via-api', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shop_id: sid, campaigns, settings: settings.value })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '创建失败'); return; }
+            showToast('接口直推完成：' + (d.message || '已提交赛狐后台'));
+          } catch (e) {
+            showToast('创建失败：' + (e.message || '网络异常'));
+          } finally {
+            mtCreating.value = false;
+          }
+        };
+
+        /* ============ 定时任务 ============ */
+        const schedStatus = ref({ running: false, timezone: 'Asia/Tokyo', jobs: [], valid_days: [] });
+        const schedBusy = ref(false);
+        const schedMsg = ref('');
+
+        const loadSchedStatus = async (silent) => {
+          try {
+            const res = await fetch('/api/scheduler/status');
+            if (!res.ok) return;
+            const d = await res.json();
+            schedStatus.value = d;
+          } catch (e) {
+            if (!silent) showToast('读取调度状态失败');
+          }
+        };
+
+        const toggleScheduler = async () => {
+          schedBusy.value = true;
+          try {
+            const url = schedStatus.value.running ? '/api/scheduler/stop' : '/api/scheduler/start';
+            const res = await fetch(url, { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '操作失败'); return; }
+            schedStatus.value = d;
+            showToast(d.running ? '调度器已启动' : '调度器已停止');
+          } catch (e) {
+            showToast('操作失败：' + (e.message || '网络异常'));
+          } finally {
+            schedBusy.value = false;
+          }
+        };
+
+        const saveSchedConfig = async () => {
+          schedBusy.value = true;
+          schedMsg.value = '';
+          try {
+            const payload = {};
+            (schedStatus.value.jobs || []).forEach(j => { payload[j.id] = { ...(j.config || {}) }; });
+            const res = await fetch('/api/scheduler/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '保存失败'); return; }
+            schedStatus.value = d;
+            schedMsg.value = '✓ 已保存并生效';
+            setTimeout(() => (schedMsg.value = ''), 3000);
+            showToast('同步计划已保存');
+          } catch (e) {
+            showToast('保存失败：' + (e.message || '网络异常'));
+          } finally {
+            schedBusy.value = false;
+          }
+        };
+
+        const runJobNow = async (jobKey) => {
+          schedBusy.value = true;
+          try {
+            const res = await fetch('/api/scheduler/run-now/' + encodeURIComponent(jobKey), { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '执行失败'); return; }
+            showToast('任务已在后台开始执行，请留意下方状态');
+            await loadSchedStatus(true);
+          } catch (e) {
+            showToast('执行失败：' + (e.message || '网络异常'));
+          } finally {
+            schedBusy.value = false;
+          }
+        };
+
+        /* ============ Tab 切换 ============ */
+        const switchTab = async (tab) => {
+          activeTab.value = tab;
+          if (tab === 'manual') {
+            if (!mtRows.value.length) await loadSearchTerms();
+            await loadManualProducts();
+          }
+          if (tab === 'sync') {
+            await loadSchedStatus(true);
+            await loadDbShops();
+          }
+        };
+
+        /* ============ 初始化 ============ */
         loadDict();
+        checkCookie();
+        loadDbShops();
+        loadSchedStatus(true);
+
+        // 定时刷新调度状态（仅同步页可见时）
+        setInterval(() => {
+          if (activeTab.value === 'sync') loadSchedStatus(true);
+        }, 4000);
 
         return {
+          /* 通用 */
+          activeTab, switchTab, toast, showToast, fmt,
+          /* 自动广告 v10 */
           allShopsData, shopList, selectedShop, currentShopData, filteredProducts,
           selectedProducts, assignedTotal, isAllFilteredSelected, skuSearchKeyword,
           settings, budgetMode, singleBudgetInput, totalPoolBudgetInput,
           sortMode, imgErrors, sortLabel, skuSortIcon, toggleSkuSort,
+          refreshingNames, refreshNameMatching, isNameManuallyEdited,
+          fileName, loading, loadingText, exporting, dragging, error, headerRow, resolvedCols,
+          handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel,
+          /* 数据源 */
+          dataSource, showExcel, dbShops, selectedDbShopId, loadingDb, onDbShopChange, loadShopIntoAuto,
+          /* 词库 */
           dictOpen, dictSearch, dictEntries, dictStats, dictInput, newEntry, filteredDict,
           openDict, reloadDict, importDict, refreshDictCount, addDictEntry, saveDictEntry, deleteDictEntry,
-          refreshingNames, refreshNameMatching, isNameManuallyEdited,
-          fileName, loading, loadingText, exporting, dragging, error, toast, headerRow, resolvedCols,
-          fmt, handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel
+          /* Cookie */
+          cookieStatus, cookieStr, savingCookie, cookieMsg, cookieOk, grabbing, grabMsg, grabOk,
+          checkCookie, updateCookie, grabCookie,
+          /* 店铺同步 */
+          discovering, syncingShop, syncDays, syncMsg, discoverShops, syncProducts, syncSearchTerms,
+          /* 手动广告 */
+          mtShopId, mtStartDate, mtEndDate, mtKeyword, mtOnlyOrders, mtRows, mtTotal,
+          mtLoading, mtSyncing, mtProducts, mtTargetSku, mtMatchType, mtBid, mtDefaultBid,
+          mtDailyBudget, mtExporting, mtCreating, mtSelected, mtAllSelected,
+          toggleSelectAllTerms, loadSearchTerms, exportManualBulk, createManualViaApi,
+          /* 定时任务 */
+          schedStatus, schedBusy, schedMsg, loadSchedStatus, toggleScheduler, saveSchedConfig, runJobNow
         };
       }
     }).mount('#app');
