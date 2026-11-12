@@ -1,14 +1,28 @@
 # Amazon SP Bulk Ads Generator
 
-> 亚马逊 Sponsored Products 广告批量表生成工作台 —— 从**赛狐 ERP 导出表**到**亚马逊 Bulk Operations 官方模板**的一键自适应转换。
+> 亚马逊 Sponsored Products 广告投放工作台 —— **赛狐 ERP 数据同步 → 商品 / 搜索词分析 → 自动广告 + 手动广告批量创建**，支持 Bulk Excel 导出与接口直接创建双通道。
 
-<p>  
-  <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">  
-  <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi\&logoColor=white">  
-  <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">  
-  <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">  
-  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-264%20assertions-success">  
+<p>
+  <img alt="version" src="https://img.shields.io/badge/version-v2.7.0-2f81f7">
+  <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">
+  <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi\&logoColor=white">
+  <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">
+  <img alt="offline" src="https://img.shields.io/badge/%E8%AF%8D%E5%BA%93-%E7%BA%AF%E7%A6%BB%E7%BA%BF-blue">
+  <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-291%20assertions-success">
 </p>
+
+> **当前版本 `v2.7.0` · 2026-11-12**
+> 本次发布将 GitHub 上停留在 **v10.0.0（`c60aff0`，2026-10-30）** 的仓库一次性补齐 **10 个功能提交**，并补上版本与维护文档。
+> 首次部署 / 从旧版升级请先读 [发版说明与升级指南](docs/RELEASE_NOTES_v2.7.0.md)。
+
+## 文档索引
+
+| 文档 | 用途 |
+| --- | --- |
+| [README.md](README.md) | 项目概览、安装、使用流程、FAQ、API 一览（本文） |
+| [CHANGELOG.md](CHANGELOG.md) | 逐版本变更记录（Keep a Changelog 格式） |
+| [docs/RELEASE_NOTES_v2.7.0.md](docs/RELEASE_NOTES_v2.7.0.md) | 本次发版说明、与 GitHub 旧版差异、升级步骤与回滚 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 模块职责、数据流、关键设计约定（面向维护者） |
 
 ---
 
@@ -18,21 +32,35 @@
 
 > 运营在赛狐（Sellfox）ERP 里导出一份多店铺商品表 → 手工在亚马逊广告后台为每个父体建活动、建广告组、建 4 组自动投放、逐个填竞价 → 动辄几十上百个活动，人工做一次要几小时，且**任何一个字段写错，整个 Bulk 文件会被亚马逊整体拒绝**（19853 行全废）。
 
-本工具把这条链路压缩成 **3 步、30 秒**：
+v10 把这条链路压缩成 3 步；**v2.x 进一步把「导表」这一步也自动化了**：配置一次赛狐登录态，商品库与搜索词报表会自动落到本地 SQLite，之后可直接从本地库选品、看哪些父体还没开广告、批量创建投放。
 
 ```
-赛狐导出 Excel  ──▶  网页端勾选 + 调预算  ──▶  下载亚马逊 Bulk Excel  ──▶  后台上传
+路径 A（离线）  赛狐导出 Excel ──▶ 网页勾选 + 调预算 ──▶ 下载 Bulk Excel ──▶ 亚马逊后台上传
+路径 B（在线）  赛狐 API 同步 ──▶ 本地 SQLite 商品库/搜索词 ──▶ 选品分析
+                                    ├──▶ 导出 Bulk Excel
+                                    └──▶ 接口直接创建（自动广告 / 手动广告）
 ```
 
-**核心特性**
+### 基础能力（v1 ~ v10，完整保留）
 
-| 能力           | 说明                                                                                      |
-| ------------ | --------------------------------------------------------------------------------------- |
-| **多店铺隔离**    | 单文件支持 **16+ 个店铺**混合导出；按「店铺」列分层聚合，各店铺**独立**计算价格中位数，互不污染                                  |
-| **自适应表头嗅探**  | 不要求固定列序 / 固定表头行。启发式扫描前若干行找真实表头，再按「别名库 + 有效值密度」择优定位每一列                                   |
-| **客单价加权预算池** | 两种策略：`等权预算`（每个活动相同）/ `客单价加权总预算池`（`Budget_i = max(100, Pool × P_i / ΣP_k)`），按价格中位数比率自动分配 |
-| **纯离线名词词库**  | 日文标题 → 中文品名的匹配**完全离线**（零网络、零延迟、零封禁风险）。377 条纯净名词 + 位置优先 / 长词优先双规则 + 一键热更新                |
-| **官方模板零漂移**  | 输出表头与亚马逊官方模板 `商品推广活动` 工作表 **31 列逐字对齐**；上传前本地自检拦截，杜绝「生成了才发现被拒」                           |
+| 能力 | 说明 |
+| --- | --- |
+| **多店铺隔离** | 单文件支持 16+ 店铺混合导出；按「店铺」分层聚合，各店铺独立计算价格中位数，互不污染 |
+| **自适应表头嗅探** | 不要求固定列序 / 表头行；启发式扫描 + 别名库 + 有效值密度择优定位每一列 |
+| **客单价加权预算池** | `等权预算` / `客单价加权总预算池`（`Budget_i = max(100, Pool × P_i / ΣP_k)`） |
+| **纯离线名词词库** | 日文标题 → 中文品名匹配完全离线（零网络、零延迟、零封禁风险）；461 条纯净名词 + 位置优先 / 长词优先 + 热更新 |
+| **官方模板零漂移** | 输出表头与亚马逊官方模板 31 列逐字对齐；`_validate_output()` 本地自检拦下非法值 |
+
+### v2.x 新增能力
+
+| 能力 | 说明 |
+| --- | --- |
+| **多赛狐账号池** | 多份 Cookie 按账号隔离（ContextVar），逐个账号同步，登录态互不覆盖；店铺归属记录在 `shops.account_id` |
+| **本地商品库 + 增量同步** | SQLite（WAL）持久化商品 / 每日搜索词 / 投放产生 ASIN；APScheduler 定时增量同步 |
+| **手动广告工作台** | 搜索词出单分析、关键词 / ASIN 双维度、匹配类型多选、竞价倍数批量应用、逐行可编辑活动名 |
+| **接口直接创建** | 自动广告与手动广告均可跳过 Excel，直接调赛狐接口创建活动；Bulk 导出能力同时保留 |
+| **父 SKU 广告开启状态** | 按活动 `state` 判定「已开启 / 已暂停 / 未开启」，支持「只看未开」筛选，快速找出尚未投放的商品 |
+| **图片代理与数据外置** | 商品图走后端白名单代理 + 落盘缓存；`SELLFOX_HOME` 把数据库与 Cookie 物理移出仓库 |
 
 ---
 
@@ -40,37 +68,58 @@
 
 ### 2.1 技术栈
 
-| 层      | 技术                                                               |
-| ------ | ---------------------------------------------------------------- |
-| **后端** | FastAPI + Uvicorn（ASGI）、Pandas、NumPy、OpenPyXL                    |
-| **前端** | 单页应用（SPA）：Vue 3 + TailwindCSS（CDN 引入，**无需 npm / 构建**）            |
-| **数据** | 本地 JSON 词库 `data/ja_zh_dict.json`（原子写入 `os.replace` + mtime 热重载） |
-| **网络** | **运行时零外部依赖**：不调用任何翻译 / 广告 / 第三方 API                              |
+| 层 | 技术 |
+| --- | --- |
+| **后端** | FastAPI + Uvicorn（ASGI）、Pandas、NumPy、OpenPyXL、APScheduler |
+| **前端** | 单页应用（SPA）：Vue 3 + TailwindCSS（CDN 引入，**无需 npm / 构建**） |
+| **数据** | SQLite（WAL）本地库 + 离线 JSON 词库 `data/ja_zh_dict.json`（原子写入 + mtime 热重载） |
+| **离线能力** | 名词匹配 / Bulk 生成 / Excel 解析 **完全离线**，不依赖翻译或第三方 API |
+| **在线能力**（可选） | 赛狐 ERP 接口（商品 / 搜索词 / 活动与广告商品 / 创建广告）、亚马逊图床图片代理；仅在配置登录态后启用 |
+| **浏览器自动化** | Playwright（半自动登录，复用本机 Chrome，免 `playwright install`） |
+
+> ⚠️ 与 v10 的差异：v10 声称「运行时零外部依赖」；v2.x 的**在线同步与接口创建**需要赛狐登录态，
+> 但**离线路径（上传 Excel → 生成 Bulk）依然零网络依赖**，两条路径互不影响。
 
 ### 2.2 目录结构
 
 ```
 amazon-bulk-ads-generator/
-├── main.py                     # FastAPI 入口：路由 + 启动
+├── main.py                     # FastAPI 入口：全部路由 + 启动
 ├── start.bat                   # Windows 一键启动（自动建 venv、装依赖、开浏览器）
+├── 启动（数据外置）.bat          # 带 SELLFOX_HOME 的一键启动（推荐）
+├── 启动Chrome调试模式.bat        # 半自动登录时抓 Cookie 用
 ├── requirements.txt            # Python 依赖
+├── README.md / CHANGELOG.md    # 项目说明 / 逐版本变更
+├── docs/
+│   ├── RELEASE_NOTES_v2.7.0.md # 本次发版说明 + 升级与回滚
+│   └── ARCHITECTURE.md         # 模块职责与关键设计约定
 ├── core/
 │   ├── parser.py               # 赛狐导出表自适应解析（表头嗅探 / 别名 / 多店铺聚合）
 │   ├── budget_engine.py        # 客单价中位数加权预算池（纯函数）
 │   ├── bulk_generator.py       # 亚马逊 Bulk Excel 生成 + 上传前自检
-│   └── translator.py           # 离线纯净名词词库匹配引擎
+│   ├── translator.py           # 离线纯净名词词库匹配引擎
+│   ├── paths.py                # ★ 数据/配置目录统一出口（SELLFOX_HOME）
+│   ├── database.py             # SQLite 商品库 / 搜索词 / 父 SKU 映射
+│   ├── sellfox_client.py       # 赛狐 API 客户端 + 多账号 Cookie 上下文
+│   ├── sync_service.py         # 按店铺分片的增量同步编排
+│   ├── scheduler.py            # APScheduler 定时任务
+│   └── ad_coverage.py          # 父 SKU 广告开启状态判定（纯逻辑）
 ├── static/
 │   └── index.html              # 单文件 Vue 3 SPA（UI 全部在这里）
 ├── data/
-│   └── ja_zh_dict.json         # 中日名词对照词库（可热更新）
+│   └── ja_zh_dict.json         # 中日名词对照词库（唯一随仓库发布的业务数据）
 ├── samples/
 │   ├── AdvertisingBulksheetTemplate-seller.xlsx   # 亚马逊官方空白模板（回归基准）
-│   ├── patch_v7_nouns.json                        # 词库增量导入示例
-│   └── example_import_nouns.json                  # 词库导入格式示例
+│   ├── fixtures/sellfox_export_demo.xlsx          # 全合成演示导出表
+│   └── patch_v7_nouns.json / example_import_nouns.json
 ├── tools/
-│   └── rebuild_from_report.py  # 排障工具：从亚马逊回传报错报告反向重出表格
-└── tests/                      # 6 个验收脚本，264 条断言
+│   ├── migrate_to_external.py  # 把 data/ config/ 一键搬到项目外
+│   ├── rebuild_from_report.py  # 从亚马逊回传报错报告反向重出表格
+│   └── make_demo_fixture.py    # 生成合成测试样本
+└── tests/                      # 8 个验收脚本，run_all 共 291 条断言
 ```
+
+> `data/local_store.db`、`config/sf_cookies.json` 等**运行时数据不属于仓库**，见 [3.3 数据目录](#33-数据目录把数据库和-cookie-放到项目外强烈建议)。
 
 ### 2.3 核心机制
 
@@ -210,11 +259,42 @@ amazon-bulk-ads-generator/     ← 只有代码，可安全 git push
 
 ### 3.4 使用流程
 
+#### 路径 A · Excel 离线出表（零配置，v10 起就有）
+
 1. 把赛狐导出的 `.xlsx` **拖入页面**（或点击上传区选择文件）。
-2. 左侧切换 **店铺 Tab**，核对「清洗后品名 / 客单均价 / 分配预算」。
+2. 切换 **店铺 Tab**，核对「清洗后品名 / 客单均价 / 分配预算」。
 3. 在「投放与预算策略」里设置：竞价策略、预算分配模式、默认竞价、广告位溢价、自动 4 组竞价。
 4. 勾选要投放的父体（支持全选 / 排序），点击 **生成亚马逊 Bulk 表格** 下载。
 5. 到亚马逊广告后台 → **批量操作 → 上传**。建议先传小批量验证，再传全量。
+
+#### 路径 B · 本地商品库 + 自动广告
+
+1. 在「同步与 Cookie 设置」完成赛狐登录（见 3.5），点 **同步商品**，让本地库有数据。
+2. 自动广告模块选 **载入本地商品库** → 选店铺 → 表格里可看商品图、客单价、建议预算、**广告状态**。
+3. 勾 **只看未开** 可筛出尚未投放的父体；`↻` 可强制刷新覆盖判定缓存（默认缓存 10 分钟）。
+4. 二选一收尾：
+   - **生成 Bulk 表格** → 下载后到亚马逊后台上传；
+   - **⚡ 接口直接创建** → 直接调赛狐接口按「一个父体一个自动活动」创建，活动名与 Bulk 同口径（`父SKU_品名_自动_YYYYMMDD`）。
+
+#### 路径 C · 搜索词 / 投放产生 ASIN → 手动广告
+
+1. **查询并同步**：按所选店铺 + 起止日期拉取搜索词报表（本地已有日期自动跳过），拉完自动查询。
+2. 切换维度：**用户搜索词**（投关键词）/ **投放产生 ASIN**（把出单 ASIN 投到目标 ASIN 上，此维度才有「投 ASIN」列）。
+3. 设置匹配类型（可多选）、竞价倍数、活动名模板（支持 `{来源活动}`，自动清洗为 `SKU+产品名`）。
+4. **导出 Bulk** 或 **接口直接创建**。关键词投放与商品投放混合时，接口创建会自动拆成两次请求（赛狐限制），Bulk 导出不受此限制。
+
+> 接口创建属于**写操作**，会真的在赛狐后台建活动。首次使用建议先用小批量 + 单一店铺验证。
+
+### 3.6 版本、测试与发布
+
+| 项 | 值 |
+| --- | --- |
+| 当前版本 | `v2.7.0`（`main.__version__` / `GET /api/health`） |
+| GitHub 上一版 | `v10.0.0`，commit `c60aff0`，2026-10-30，无 tag / 无 Release |
+| 验收测试 | `bash tests/run_all.sh` → **PASS 291 / FAIL 0**（7 个脚本）；另有 `test_7_multi_account.py` 9 项独立断言 |
+| 变更记录 | `CHANGELOG.md`；新增版本需同时更新 `__version__` 与发版说明 |
+
+发布流程见 [docs/RELEASE_NOTES_v2.7.0.md](docs/RELEASE_NOTES_v2.7.0.md) 末尾的「维护者发布清单」。
 
 ---
 
@@ -421,26 +501,112 @@ python tools/rebuild_from_report.py <report.xlsx> <输出目录>
 
 </details>
 
+<details>
+
+<summary><b>Q10. 载入本地商品库后图片全是白块？</b></summary>
+
+不是数据缺失，是浏览器直连 `m.media-amazon.com` 常被防盗链 / 网络拦截。
+
+v2.6 起所有商品图统一走后端 `GET /api/image-proxy?u=...`：白名单域名校验 + sha1 落盘缓存（`data/image_cache/`）+ 7 天 `Cache-Control`。若仍是白块，检查后端日志里代理请求的状态码，以及 `SELLFOX_HOME/data/image_cache/` 是否可写。
+
+</details>
+
+<details>
+
+<summary><b>Q11. 「查询并同步」到底同步了哪段时间？</b></summary>
+
+同步范围**严格取页面上的店铺下拉 + 起止日期**，默认最多 92 天。本地已经存在该店铺该日期数据时会自动跳过（`force=false`），重复点不会重复拉取；单日失败只在该日写一条 `error`，不影响其它日期。
+
+需要强制重拉时调用 `POST /api/sync/search-terms` 并传 `"force": true`。
+
+</details>
+
+<details>
+
+<summary><b>Q12. 搜索词少了几行 / 某些店铺查不到数据？</b></summary>
+
+两类原因：
+
+- **Cookie 失效**：赛狐返回 `2001 验证失败` 或 `360000 没有店铺访问权限` → 在「同步与 Cookie 设置」重新登录。Cookie 一般 5 天左右过期。
+- **串号**：多账号场景下，某个店铺只能用**归属账号**的 Cookie 访问。`shops.account_id` 记录归属；v2.4 起同步会先探测当前账号可访问店铺再过滤。若看到「店铺不属当前账号」提示，切换到对应账号即可。
+
+> 搜索词必须**按店铺分片拉取**：全账号一次拉会因赛狐排序不稳定导致漏 5%~19% 行。
+
+</details>
+
+<details>
+
+<summary><b>Q13. 「广告状态」里的已暂停 / 未开启有什么区别？</b></summary>
+
+判定规则：**只有活动 `state == enabled` 才算「已开启」**，`paused` 与 `archived` 都不算。
+
+| 显示 | 含义 |
+| --- | --- |
+| 🟢 已开启 | 找到至少一个 enabled 活动，且广告商品 SKU 归属该父体 |
+| ⚪ 已暂停 | 只找到 paused / archived 活动，没有 enabled 的 |
+| ⚪ 未开启 | 完全没找到相关活动 |
+| 查询中 / 未知 | 覆盖数据尚未返回，或取数失败（此时不阻塞商品表） |
+
+首次查询会拉活动与广告商品，大店铺约 20 秒；结果缓存 10 分钟，可点 `↻` 强制刷新。
+
+</details>
+
+<details>
+
+<summary><b>Q14. 接口直接创建报「不能同时提交关键词与商品投放」？</b></summary>
+
+赛狐的 `spTargetInfo.keywordTarget` 是二选一开关：`True + keywords[]` 或 `False + targetings[]`，同一次请求不能混合。
+
+手动广告接口创建会自动拆成「原活动」+「原活动_ASIN」两次请求；**Bulk 导出不需要拆分**，亚马逊允许同一广告组里 Keyword 与 Product Targeting 共存。如果遇到其它创建失败，先用 Bulk 导出验证配置，再切回接口创建。
+
+</details>
+
 ---
 
 ## 附录 A · API 一览
 
-| 方法       | 路径                        | 说明                             |
-| -------- | ------------------------- | ------------------------------ |
-| `GET`    | `/`                       | 单页应用入口                         |
-| `GET`    | `/api/health`             | 健康检查（含版本号）                     |
-| `POST`   | `/api/analyze`            | 上传赛狐 Excel → 返回按店铺分层的商品聚合与预算建议 |
-| `POST`   | `/api/generate`           | 提交勾选商品 + 配置 → 下载亚马逊 Bulk Excel |
-| `POST`   | `/api/dictionary/import`  | 导入中日对照 JSON（持久化 + 清缓存）         |
-| `GET`    | `/api/dictionary`         | 词库统计 + 全部条目                    |
-| `GET`    | `/api/dictionary/stats`   | 词库条数总览                         |
-| `GET`    | `/api/dictionary/export`  | 导出当前词库 JSON                    |
-| `POST`   | `/api/dictionary`         | 新增 / 修改一条词条                    |
-| `DELETE` | `/api/dictionary`         | 删除一条词条                         |
-| `POST`   | `/api/dictionary/reload`  | 从磁盘重载词库                        |
-| `POST`   | `/api/dictionary/rematch` | 用最新词库重匹配一批标题（不落盘）              |
+完整 OpenAPI 文档：启动后访问 **<http://127.0.0.1:8000/docs>**。以下按模块列出主要接口。
 
-交互式文档：启动后访问 **<http://127.0.0.1:8000/docs>**
+**基础 / Excel 链路（v10 起）**
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/` | 单页应用入口 |
+| `GET` | `/api/health` | 健康检查：版本号、Cookie 状态、库统计、`db_path` |
+| `GET` | `/api/system/paths` | 当前 `SELLFOX_HOME` / 数据 / 配置实际路径 |
+| `POST` | `/api/analyze` | 上传赛狐 Excel → 按店铺分层的商品聚合 + 预算建议 |
+| `POST` | `/api/generate` | 勾选商品 + 配置 → 下载亚马逊 Bulk Excel |
+| `POST/GET/DELETE` | `/api/dictionary*` | 词库增删改查、导入导出、磁盘重载、`rematch` 重匹配 |
+
+**账号 / Cookie / 同步（v2.4 起）**
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET/POST` | `/api/accounts` | 账号池列表 / 新增 |
+| `POST` | `/api/accounts/{id}/activate` `…/probe` | 切换当前账号 / 探测可访问店铺 |
+| `DELETE` | `/api/accounts/{id}` | 移除账号 |
+| `POST` | `/api/accounts/login` + `/status` + `/cancel` | 半自动账号密码登录（人工输验证码） |
+| `GET/POST` | `/api/cookie/status` `/api/cookie/update` | 登录态查询 / 手动粘贴 |
+| `GET` | `/api/cookie/shop-access` | 探测当前账号可访问店铺（结果缓存 5 分钟） |
+| `GET/POST` | `/api/shops` `/api/shops/register` `/api/shops/discover` | 店铺列表 / 登记 / 发现 |
+| `POST` | `/api/sync/products` | 按店铺同步商品到本地库 |
+| `POST` | `/api/sync/search-terms` | 按店铺 + 起止日期同步搜索词（`force` 可强制重拉） |
+| `POST` | `/api/sync/search-terms/range` + `/status` | 后台批量区间同步 + 进度 |
+| `POST` | `/api/sync/all-accounts` + `/status` | 多账号一键全量同步 + 进度 |
+| `GET/POST` | `/api/scheduler/*` | 定时任务状态 / 启停 / 配置 / 立即执行 |
+
+**商品库 / 广告工作台（v2.6 ~ v2.7）**
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/products/{shop_id}` | 本地商品库原始列表 |
+| `GET` | `/api/products/{shop_id}/payload` | 与 `/api/analyze` **同结构**的商品聚合（自动广告用） |
+| `GET` | `/api/shops/{shop_id}/ad-coverage` | 父 SKU 广告开启状态（`refresh` / `days`，10 分钟缓存） |
+| `GET` | `/api/image-proxy?u=` | 商品图代理（域名白名单 + sha1 落盘缓存） |
+| `POST` | `/api/auto-ads/create-via-api` | 自动广告接口直接创建 |
+| `POST` | `/api/search-terms/query` | 搜索词 / 投放产生 ASIN 双维度查询 |
+| `POST` | `/api/manual-ads/export-bulk` | 手动广告 Bulk 导出 |
+| `POST` | `/api/manual-ads/create-via-api` | 手动广告接口直接创建（混合投放自动拆单） |
 
 ## 附录 B · 输出表头（官方 31 列 + 1 辅助列）
 
@@ -460,25 +626,37 @@ python tools/rebuild_from_report.py <report.xlsx> <输出目录>
 ## 附录 C · 验收测试
 
 ```bash
-# 一键跑全部（test_4 需要后端已在 127.0.0.1:8000 运行）
+# 一键跑全部：test_4 需要后端已在 127.0.0.1:8000 运行；test_6 需要 jsdom
 bash tests/run_all.sh
+# 多账号隔离的独立用例（不在 run_all 内，需 PYTHONPATH 指向仓库根）
+PYTHONPATH="$(pwd)" venv/Scripts/python.exe tests/test_7_multi_account.py
 ```
 
-| 脚本                        | 覆盖内容                      |
-| ------------------------- | ------------------------- |
-| `test_1_noun_matching.py` | 名词匹配五项准则、修饰词后缀、性能、倒排索引一致性 |
+| 脚本 | 断言 | 覆盖内容 |
+| --- | --- | --- |
+| `test_1_noun_matching.py` | 53 | 名词匹配五项准则、修饰词后缀、性能、倒排索引一致性 |
+| `test_2_end_to_end.py` | 80 | 解析 → 预算 → 生成；表头与官方 31 列逐字比对；字段合规；v10 临时 ID 事故回归 |
+| `test_3_dictionary_io.py` | 24 | 词库增删改查、原子写入、热重载 |
+| `test_4_http_smoke.py` | 42 | HTTP 接口冒烟（需后端运行） |
+| `test_5_v7_quantity_and_rematch.py` | 42 | 数量词清洗、`match_noun_only`、rematch 契约、真实数据端到端 |
+| `test_8_ad_coverage.py` | 27 | 广告状态字段兼容、enabled/paused/archived 判定、活动名兜底整词匹配 |
+| `test_6_frontend_refresh.js` | 23 | 前端「刷新品名匹配」交互（jsdom + 真实 Vue 运行时） |
+| **run_all 合计** | **291** | `PASS 291 / FAIL 0` |
+| `test_7_multi_account.py` | 9 | 账号池隔离、`get_account` 不回退 active、店铺归属（独立运行） |
 
-
-| `test_2_end_to_end.py` | 解析 → 预算 → 生成；表头与官方模板逐字比对；字段合规；自检负向用例 |  
-| `test_3_dictionary_io.py` | 词库增删改查、原子写入、热重载 |  
-| `test_4_http_smoke.py` | 全部 HTTP 接口冒烟（需后端运行） |  
-| `test_5_v7_quantity_and_rematch.py` | 数量词清洗、`match_noun_only`、rematch 契约、真实数据端到端 |  
-| `test_6_frontend_refresh.js` | 前端「刷新品名匹配」交互（jsdom + 真实 Vue 运行时） |
-
-合计 **264 条断言**。
+> `tests/run_all.sh` 默认使用项目 `venv/Scripts/python.exe`；用系统 Python 会因缺 `apscheduler` 让 `test_5` 误报失败。
+> `test_2` 会把 `BULK_COLUMNS` 与 `samples/AdvertisingBulksheetTemplate-seller.xlsx` 官方表头逐字比对，任何列名漂移都会被拦下。
 
 ---
 
-## 许可与致谢
+## 安全与隐私
 
-内部运营工具。词库（`data/ja_zh_dict.json`）为业务资产，请勿外传。
+- `config/sf_cookies.json`、`config/sf_accounts.json`、`data/local_store.db` 及 Chrome profile **全部禁止进仓库**（`.gitignore` 已排除）；推荐用 `SELLFOX_HOME` 物理外置，见 [3.3](#33-数据目录把数据库和-cookie-放到项目外强烈建议)。
+- 仓库内不含任何真实店铺名 / shop_id；测试与示例统一使用 `店铺A-JP…` / `100001…` 占位。
+- **接口直接创建会真的在赛狐后台建活动**，请先小批量验证。
+- 商品图代理只允许 `m.media-amazon.com` 等 5 个亚马逊域名，不接受任意 URL，避免 SSRF。
+
+## 许可
+
+内部运营工具，未选择开源许可证；未经授权不得公开分发。
+`data/ja_zh_dict.json` 为业务词库资产，请在团队内部使用。

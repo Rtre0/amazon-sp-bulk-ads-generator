@@ -1,7 +1,14 @@
-"""Amazon Bulk Operations Ads Generator —— FastAPI 主入口（v2.0 全自动数据同步与双模块系统）。
+"""Amazon Bulk Operations Ads Generator —— FastAPI 主入口（v2.7.0）。
 
 一键运行：``python main.py``
 启动后自动在浏览器打开 http://127.0.0.1:8000
+
+版本线说明
+--------------------------------------------------------------------
+GitHub 上的最后一个旧版发布为 **v10.0.0**（commit c60aff0，2026-10-30），
+属于「Excel → Bulk 单文件生成器」版本线。之后项目按功能模块重新编号为
+v2.x 系列；当前 **v2.7.0** 已包含多账号同步、本地商品库、自动/手动广告
+双模块、接口直接创建与父 SKU 广告开启状态判定。详见 CHANGELOG.md。
 
 v2.0 升级（重大）
 --------------------------------------------------------------------
@@ -53,10 +60,14 @@ from core import scheduler
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
+# 版本号唯一来源：FastAPI 元数据与 /api/health 都读它，避免两处硬编码漂移。
+# 发布新版本时请同步更新 CHANGELOG.md 与 docs/RELEASE_NOTES_*.md。
+__version__ = "2.7.0"
+
 app = FastAPI(
-    title="Amazon Bulk Ads Generator v2.0",
-    description="全自动数据同步与双模块（自动广告 + 手动广告）系统",
-    version="2.0.0",
+    title="Amazon SP Bulk Ads Generator",
+    description="赛狐 ERP 数据同步 + 自动/手动广告双模块工作台",
+    version=__version__,
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -200,7 +211,7 @@ def read_root():
 def health():
     return {
         "status": "ok",
-        "version": "2.0.0",
+        "version": __version__,
         "modules": ["auto_ads", "manual_ads", "cookie_mgmt", "scheduler"],
         "cookie_valid": sf.has_valid_cookies(),
         "dict_count": len(noun_matcher.dictionary),

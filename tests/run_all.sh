@@ -46,7 +46,7 @@ run_py () {
 }
 
 echo "==================================================================="
-echo " Amazon Bulk Ads Generator · 全量验收测试 (v10)"
+echo " Amazon Bulk Ads Generator · 全量验收测试 (v2.7.0)"
 echo "==================================================================="
 
 for f in tests/test_1_noun_matching.py tests/test_2_end_to_end.py \
