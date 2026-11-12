@@ -8,7 +8,15 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PY="${PY:-C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe}"
+# 默认用项目自带 venv（缺 numpy/apscheduler 的系统 python 会让 test_4/test_5 误报失败）
+if [ -x "venv/Scripts/python.exe" ]; then
+  _VENV_PY="venv/Scripts/python.exe"
+elif [ -x ".venv/Scripts/python.exe" ]; then
+  _VENV_PY=".venv/Scripts/python.exe"
+else
+  _VENV_PY="C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe"
+fi
+PY="${PY:-$_VENV_PY}"
 NODE="${NODE:-C:/Users/Administrator/.workbuddy-ai/binaries/node/versions/22.22.2-6/node.exe}"
 NODE_MODULES="${NODE_MODULES:-C:/Users/Administrator/.workbuddy-ai/binaries/node/workspace/node_modules}"
 
