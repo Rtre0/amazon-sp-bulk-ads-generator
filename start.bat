@@ -36,6 +36,17 @@ if not exist "venv\Scripts\python.exe" (
     echo.
 )
 
+rem ---------- 数据目录：优先使用项目外的 SELLFOX_HOME ----------
+rem 项目要上传 GitHub，数据库和 Cookie 不能留在项目里。
+rem 若 %USERPROFILE%\SellfoxAdsData 已存在（跑过 migrate_to_external.py），就自动用它。
+if exist "%USERPROFILE%\SellfoxAdsData\data\local_store.db" (
+    set "SELLFOX_HOME=%USERPROFILE%\SellfoxAdsData"
+    echo [数据] 外部数据目录: %USERPROFILE%\SellfoxAdsData
+) else (
+    echo [数据] 项目内 data\ 与 config\（尚未外置）
+)
+echo.
+
 rem ---------- 检查端口占用：自动结束上一次遗留的旧服务 ----------
 set "PORT=8000"
 set "OLDPID="

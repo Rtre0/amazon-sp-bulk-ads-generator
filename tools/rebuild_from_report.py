@@ -10,8 +10,8 @@ report.xlsx 的 ``Sponsored Products Campaigns`` 工作表会把「我们上传�
     python tools/rebuild_from_report.py <report.xlsx> <输出目录> [--placement-top N] [--placement-product N]
 
 产出：
-    三头牛-JP_SP_Bulk_v9_全量.xlsx        —— 全部活动
-    三头牛-JP_SP_Bulk_v9_测试_仅1个活动.xlsx —— 子体最多的那个活动（便于先小文件试传）
+    店铺C-JP_SP_Bulk_v9_全量.xlsx        —— 全部活动
+    店铺C-JP_SP_Bulk_v9_测试_仅1个活动.xlsx —— 子体最多的那个活动（便于先小文件试传）
 """
 
 from __future__ import annotations
@@ -117,14 +117,14 @@ def main() -> None:
     }
 
     os.makedirs(out_dir, exist_ok=True)
-    full = os.path.join(out_dir, "三头牛-JP_SP_Bulk_v9_全量.xlsx")
+    full = os.path.join(out_dir, "店铺C-JP_SP_Bulk_v9_全量.xlsx")
     with open(full, "wb") as fh:
         fh.write(generate_bulk_excel(products, settings).getvalue())
     print(f"已写出 {full}  ({os.path.getsize(full)} 字节)")
 
     biggest = max(products, key=lambda p: len(p["children"]))
     smallest = min(products, key=lambda p: len(p["children"]))
-    one = os.path.join(out_dir, "三头牛-JP_SP_Bulk_v9_测试_仅1个活动.xlsx")
+    one = os.path.join(out_dir, "店铺C-JP_SP_Bulk_v9_测试_仅1个活动.xlsx")
     with open(one, "wb") as fh:
         fh.write(generate_bulk_excel([smallest], settings).getvalue())
     print(

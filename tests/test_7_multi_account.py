@@ -69,14 +69,14 @@ try:
     print("ACTIVE_DELETE_OK", sf.active_account_id())
 
     # ---- 7. 店铺归属 ----
-    db.upsert_shop("560591", "大成-JP", account_id=a1["id"])
-    db.upsert_shop("560601", "泽泽利塔-JP", account_id=a1["id"])
-    db.upsert_shop("562589", "利达-JP", account_id="acc_other")
+    db.upsert_shop("100001", "店铺A-JP", account_id=a1["id"])
+    db.upsert_shop("100002", "店铺B-JP", account_id=a1["id"])
+    db.upsert_shop("100003", "店铺E-JP", account_id="acc_other")
     assert len(db.list_shops(a1["id"])) == 2, db.list_shops(a1["id"])
     assert len(db.list_shops()) == 3
     # 空 account_id 不应抹掉已有归属
-    db.upsert_shop("560591", "大成-JP")
-    assert db.get_shop("560591")["account_id"] == a1["id"]
+    db.upsert_shop("100001", "店铺A-JP")
+    assert db.get_shop("100001")["account_id"] == a1["id"]
     print("SHOP_OWNER_OK")
 
     # ---- 8. sync_all_accounts 遍历账号且上下文正确 ----

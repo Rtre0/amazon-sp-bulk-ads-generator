@@ -18,6 +18,7 @@ sys.path.insert(0, BASE)
 sys.stdout.reconfigure(encoding="utf-8")
 
 from core.translator import (  # noqa: E402
+    DICT_FILE,
     NON_NOUN_BLACKLIST,
     NounDictionaryMatcher,
     noun_matcher,
@@ -168,7 +169,7 @@ check("热缓存更快", dt_warm <= dt, f"{dt_warm * 1000:.1f} ms")
 
 # ---------------------------------------------------------------- 索引正确性
 print("\n[6] 首字符倒排索引一致性")
-m2 = NounDictionaryMatcher(dict_path=os.path.join(BASE, "data", "ja_zh_dict.json"))
+m2 = NounDictionaryMatcher(dict_path=DICT_FILE)
 total_indexed = sum(len(v) for v in m2._index.values())
 check("索引覆盖全部词条", total_indexed == len(m2.dictionary), f"{total_indexed}/{len(m2.dictionary)}")
 check("每个首字符桶内按长度降序",

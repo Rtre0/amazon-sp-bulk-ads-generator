@@ -41,11 +41,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 词库文件位置
+#   路径统一走 core.paths：设了 SELLFOX_HOME 就在项目外
 # ---------------------------------------------------------------------------
-DICT_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-)
-DICT_FILE = os.path.join(DICT_DIR, "ja_zh_dict.json")
+from core.paths import DATA_DIR as DICT_DIR, DICT_FILE  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 内置基础常见电商「纯物理名词」表

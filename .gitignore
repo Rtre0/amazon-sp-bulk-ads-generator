@@ -83,15 +83,27 @@ logs/
 config/sf_cookies.json
 # Cookie 备份（同样含完整登录态，★ 严禁推入仓库 ★）
 config/sf_cookies.json.bak*
+# 半自动登录「记住密码」的账号密码（★ 严禁推入仓库 ★）
+config/sf_accounts.json
+config/sf_accounts.json.bak*
 data/local_store.db
 data/local_store.db-wal
 data/local_store.db-shm
 
 # Chrome 调试专用配置目录（含赛狐登录态，★ 严禁推入仓库 ★）
 data/chrome-debug-profile/
+# 半自动登录用的持久化浏览器 profile（含赛狐登录态，★ 严禁推入仓库 ★）
+data/chrome-login-profile/
 
 # 定时任务计划（各人本地时间安排，不共享）
 data/scheduler_config.json
+
+# ---------------------------------------------------------------------------
+# ★ 更推荐：把数据整体放到项目外（物理隔离），不依赖上面的忽略规则 ★
+#   1) python tools/migrate_to_external.py --move
+#   2) 双击「启动（数据外置）.bat」，或手动 set SELLFOX_HOME=%USERPROFILE%\SellfoxAdsData
+#   这样 data/ 与 config/ 根本不在仓库目录里，git add -f 也提交不上去。
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # 本地调试临时产物（浏览器截图 / 探针输出 / 临时日志）

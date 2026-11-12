@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 # 配置持久化
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_FILE = os.path.join(BASE_DIR, "data", "scheduler_config.json")
+# 路径统一走 core.paths：设了 SELLFOX_HOME 就在项目外
+from core.paths import SCHEDULER_CONFIG_FILE as CONFIG_FILE  # noqa: E402
 
 TIMEZONE = "Asia/Tokyo"
 

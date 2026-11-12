@@ -176,7 +176,7 @@ if REAL:
     t_parse = time.time() - t0
     print(f"     解析耗时 {t_parse:.3f}s")
 
-    groups = parsed["shops"]["三头牛-JP"]["groups"]
+    groups = parsed["shops"]["店铺C-JP"]["groups"]
     check("解析出父体数量", len(groups) == 1326, f"实际 {len(groups)}")
 
     noun_matcher._cache.clear()

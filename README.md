@@ -170,13 +170,72 @@ python main.py
 
 > 前提：机器上已安装 Python 3.10+，且安装时勾选了 *Add Python to PATH*。
 
-### 3.3 使用流程
+### 3.3 数据目录：把数据库和 Cookie 放到项目外（强烈建议）
+
+本项目要上传 GitHub，而 `data/`（SQLite 数据库）和 `config/`（赛狐登录态）**只属于本机**。
+除了 `.gitignore` 排除，更稳妥的是**物理隔离**——让它们根本不在仓库目录里。
+
+```bash
+# 一次性迁移：把现有数据搬到 %USERPROFILE%\SellfoxAdsData（会自动校验行数）
+python tools/migrate_to_external.py --move
+
+# 之后启动时指定数据目录
+# Windows:
+set SELLFOX_HOME=%USERPROFILE%\SellfoxAdsData
+python main.py
+# macOS / Linux:
+export SELLFOX_HOME="$HOME/SellfoxAdsData"
+python main.py
+```
+
+Windows 用户可以直接双击 **`启动（数据外置）.bat`**，它会自动设置好 `SELLFOX_HOME`。
+
+迁移后的目录结构：
+
+```
+amazon-bulk-ads-generator/     ← 只有代码，可安全 git push
+  core/  static/  tools/  main.py  ...
+
+%USERPROFILE%\SellfoxAdsData\  ← 本地数据，永不进仓库
+  data/local_store.db          商品库 + 每日搜索词/ASIN 报告
+  data/scheduler_config.json   定时任务时间
+  data/ja_zh_dict.json         日中名词词库
+  data/chrome-login-profile/   半自动登录的浏览器配置
+  config/sf_cookies.json       赛狐登录态（多账号）
+  config/sf_accounts.json      「记住密码」的账号密码（可选）
+```
+
+> 不设 `SELLFOX_HOME` 时仍然使用项目内的 `data/` 和 `config/`，行为与旧版一致。
+> 想确认当前用的是哪套目录，访问 `GET /api/system/paths`。
+
+### 3.4 使用流程
 
 1. 把赛狐导出的 `.xlsx` **拖入页面**（或点击上传区选择文件）。
 2. 左侧切换 **店铺 Tab**，核对「清洗后品名 / 客单均价 / 分配预算」。
 3. 在「投放与预算策略」里设置：竞价策略、预算分配模式、默认竞价、广告位溢价、自动 4 组竞价。
 4. 勾选要投放的父体（支持全选 / 排序），点击 **生成亚马逊 Bulk 表格** 下载。
 5. 到亚马逊广告后台 → **批量操作 → 上传**。建议先传小批量验证，再传全量。
+
+---
+
+### 3.5 赛狐账号登录（支持多账号）
+
+一个赛狐账号只能看到**自己权限内**的店铺。有多个账号时，把每个账号分别加进「赛狐账号池」，
+点「全量同步」就会**逐个账号各拉一遍**，登录态互不覆盖。
+
+三种添加方式：
+
+| 方式 | 操作 | 适用 |
+| --- | --- | --- |
+| **账号密码登录**（推荐） | 点「🔑 账号密码登录」→ 填账号密码 → 点「打开浏览器登录」→ 在弹窗里**输入图形验证码** → 自动抓 Cookie 入池 | 日常刷新登录态 |
+| 粘贴 Cookie | 点「＋ 粘贴 Cookie」，把浏览器 F12 里的 cookie 行粘进去 | 临时应急 |
+| Chrome 调试模式 | 双击 `启动Chrome调试模式.bat`，在独立窗口登录后点「从调试端口抓取」 | 需要可视化排查 |
+
+> **为什么不能纯账号密码自动登录？** 赛狐登录页强制**图形验证码**（手机号/密码/验证码三项），
+> 没有任何公开接口能跳过。所以采用「程序填账号密码 + 人工只输 4 位验证码」的半自动方式。
+>
+> 赛狐登录页有「5 天内自动登录」选项，Cookie 一般 **5 天左右过期**，到期重新登录一次即可。
+> 勾选「记住密码」后，密码保存在 `SELLFOX_HOME/config/sf_accounts.json`（项目外，不进 Git）。
 
 ---
 
