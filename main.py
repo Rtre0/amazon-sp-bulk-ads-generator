@@ -22,16 +22,20 @@ v2.0 升级（重大）
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import hashlib
 import json
 import os
 import threading
 import time
+import urllib.parse
+import urllib.request
 import webbrowser
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -39,7 +43,9 @@ from core.budget_engine import build_shop_payload
 from core.bulk_generator import generate_bulk_excel, generate_manual_keyword_bulk
 from core.parser import parse_sellfox_excel_multi_shop
 from core.translator import noun_matcher
+from core import ad_coverage
 from core import database as db
+from core import paths
 from core import sellfox_client as sf
 from core import sync_service
 from core import scheduler
@@ -77,6 +83,17 @@ class ManualAdCreateRequest(BaseModel):
     settings: Dict[str, Any] = {}
 
 
+class AutoAdCreateRequest(BaseModel):
+    """自动广告接口直推赛狐请求。
+
+    ``products`` 与 Bulk 导出用的是同一份结构（parent_sku / product_name /
+    assigned_budget / children），只是改成调用赛狐创建接口而不是生成表格。
+    """
+    shop_id: str
+    products: List[Dict[str, Any]]
+    settings: Dict[str, Any] = {}
+
+
 class DictEntry(BaseModel):
     ja: str
     zh: str
@@ -97,7 +114,7 @@ class CookieUpdateRequest(BaseModel):
     cookie_str: str
     merge: bool = True   # 与已有 Cookie 合并，避免只粘贴一部分时冲掉登录态
     account_id: str = "" # 空 = 按登录态指纹自动归属（同一账号只更新不新增）
-    label: str = ""      # 账号备注名，如「账号A / 大成组」
+    label: str = ""      # 账号备注名，如「账号A / 备用账号」
 
 
 class AccountCreateRequest(BaseModel):
@@ -110,6 +127,16 @@ class AccountCreateRequest(BaseModel):
 class AccountRenameRequest(BaseModel):
     """重命名账号备注。"""
     label: str
+
+
+class AccountLoginRequest(BaseModel):
+    """用赛狐账号密码登录（图形验证码人工输入）。"""
+    username: str = ""
+    password: str = ""
+    label: str = ""
+    account_id: str = ""      # 指定更新已有账号；空 = 按登录态指纹自动判断
+    remember: bool = True     # 记住账号密码（存 SELLFOX_HOME/config，不进 Git）
+    timeout: int = 300        # 等待人工完成验证码的秒数
 
 
 class ShopRegisterRequest(BaseModel):
@@ -125,6 +152,11 @@ class SyncTriggerRequest(BaseModel):
     target_date: str = ""
     days: int = 1        # 搜索词回补天数（1 = 仅昨天）
     account_id: str = "" # 空 = 当前激活账号
+    # v2.6：按「用户所选起止日期」同步（手动广告页的查询并同步用它）
+    start_date: str = ""
+    end_date: str = ""
+    # False = 跳过本地已有数据的日期（默认，快）；True = 强制重新拉取覆盖
+    force: bool = False
 
 
 class SyncAllAccountsRequest(BaseModel):
@@ -132,6 +164,13 @@ class SyncAllAccountsRequest(BaseModel):
     kind: str = "search"        # search=搜索词双维度 / product=商品 / both=两者
     target_date: str = ""
     days: int = 1
+    account_ids: List[str] = []  # 空 = 全部账号
+
+
+class SyncRangeRequest(BaseModel):
+    """按显式日期区间补同步搜索词（含首尾）。"""
+    start_date: str             # YYYY-MM-DD
+    end_date: str               # YYYY-MM-DD
     account_ids: List[str] = []  # 空 = 全部账号
 
 
@@ -169,6 +208,20 @@ def health():
     }
 
 
+@app.get("/api/system/paths")
+def system_paths():
+    """当前数据/配置落在哪（用于确认「项目目录是否已与数据隔离」）。
+
+    只返回路径与体积，不含任何凭据内容。
+    """
+    from core import paths
+
+    info = paths.describe()
+    info["project_dir"] = paths.BASE_DIR
+    info["isolated"] = info["home"] != paths.BASE_DIR
+    return info
+
+
 # ===========================================================================
 # v1.0 兼容接口：Excel 上传解析 + 自动广告 Bulk 导出
 # ===========================================================================
@@ -201,6 +254,129 @@ def generate_file(payload: ExportRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=amazon_bulk_ads_auto.xlsx"},
     )
+
+
+# 亚马逊 Bulk 的「竞价方案」文案 → 赛狐接口的 strategy 枚举
+_AUTO_STRATEGY_MAP = {
+    "Fixed bid": "manual",                       # 固定竞价
+    "Dynamic bids - down only": "legacyForSales",  # 动态竞价-只降低
+    "Dynamic bids - up and down": "autoForSales",  # 动态竞价-提高和降低
+}
+
+
+@app.post("/api/auto-ads/create-via-api")
+def create_auto_via_api(req: AutoAdCreateRequest):
+    """自动广告一键通过赛狐接口创建（与手动广告的「接口直推」同一套链路）。
+
+    一个父体 = 一个自动活动：
+    - Campaign：targetingType=auto、每日预算 = 该父体分配预算、竞价方案跟随设置
+    - Ad Group：默认竞价 + 该父体下**全部子体**（SKU/ASIN）挂为广告商品
+    - 自动 4 组：紧密 / 宽泛 / 同类 / 关联，各自独立竞价
+
+    与 Bulk 导出的口径保持一致，活动名同为 ``父SKU_品名_自动_YYYYMMDD``。
+    """
+    if not sf.has_valid_cookies():
+        raise HTTPException(
+            status_code=401,
+            detail="赛狐 Cookie 未配置或已过期，请先在「同步与 Cookie 设置」导入登录态",
+        )
+    if not req.shop_id:
+        raise HTTPException(status_code=400, detail="请先选择店铺")
+
+    settings = req.settings or {}
+    strategy = _AUTO_STRATEGY_MAP.get(
+        str(settings.get("bidding_strategy") or "Fixed bid"), "manual"
+    )
+    default_bid = settings.get("default_bid", 25)
+    portfolio_id = settings.get("portfolio_id") or ""
+    include_targeting = bool(settings.get("include_targeting", True))
+    include_placement = bool(settings.get("include_placement", True))
+
+    def _pct(key: str) -> Optional[str]:
+        """广告位溢价：0 视为不做加成（与 Bulk 一致，不提交该字段）。"""
+        if not include_placement:
+            return None
+        try:
+            val = int(float(settings.get(key) or 0))
+        except (TypeError, ValueError):
+            return None
+        return str(val) if val > 0 else None
+
+    # include_targeting=False 时，4 组竞价留空 → 继承广告组默认竞价
+    def _bid(key: str, fallback: Any) -> str:
+        if not include_targeting:
+            return ""
+        return str(settings.get(key, fallback))
+
+    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    results: List[Dict[str, Any]] = []
+
+    for seq, item in enumerate(req.products, 1):
+        parent_sku = str(item.get("parent_sku") or "").strip()
+        prod_name = str(item.get("product_name") or "商品").strip() or "商品"
+        campaign_name = f"{parent_sku}_{prod_name}_自动_{today_str}"
+        try:
+            children = item.get("children") or []
+            products = [
+                {
+                    "sku": c.get("msku") or c.get("sku") or "",
+                    "asin": c.get("asin") or "",
+                }
+                for c in children
+                if (c.get("msku") or c.get("sku") or c.get("asin"))
+            ]
+            if not products:
+                results.append({
+                    "campaign_name": campaign_name,
+                    "parent_sku": parent_sku,
+                    "success": False,
+                    "errors": ["该父体没有可投放的子体（缺 MSKU / ASIN）"],
+                })
+                continue
+
+            budget = item.get(
+                "assigned_budget",
+                item.get("custom_budget", item.get("suggested_budget", 100)),
+            )
+            payload = sf.build_auto_ad_payload(
+                shop_id=req.shop_id,
+                campaign_name=campaign_name,
+                daily_budget=str(budget or 100),
+                portfolio_id=portfolio_id,
+                strategy=strategy,
+                default_bid=str(default_bid),
+                bid_close=_bid("bid_close", 25),
+                bid_loose=_bid("bid_loose", 20),
+                bid_sub=_bid("bid_substitutes", 25),
+                bid_comp=_bid("bid_complements", 20),
+                products=products,
+                placement_top=_pct("placement_top_pct"),
+                placement_product_page=_pct("placement_product_pct"),
+            )
+            resp = sf.create_sp_ad(payload)
+            check = sf.check_create_result(resp)
+            results.append({
+                "campaign_name": campaign_name,
+                "parent_sku": parent_sku,
+                "product_count": len(products),
+                "budget": budget,
+                **check,
+            })
+        except Exception as exc:  # noqa: BLE001 - 单个失败不影响其余商品
+            results.append({
+                "campaign_name": campaign_name,
+                "parent_sku": parent_sku,
+                "success": False,
+                "errors": [str(exc)],
+            })
+
+    ok = sum(1 for r in results if r.get("success"))
+    return {
+        "ok": True,
+        "shop_id": req.shop_id,
+        "summary": {"total": len(results), "success": ok, "failed": len(results) - ok},
+        "results": results,
+    }
 
 
 # ===========================================================================
@@ -449,6 +625,123 @@ def probe_account(account_id: str):
     }
 
 
+# ---------------------------------------------------------------------------
+# v2.6 半自动登录：账号密码 + 人工输入图形验证码
+#   赛狐登录页强制图形验证码，纯接口登录走不通。这里用真实浏览器完成登录，
+#   成功后自动把 Cookie 写进账号池，省掉手工复制 Cookie。
+# ---------------------------------------------------------------------------
+_LOGIN: Dict[str, Any] = {
+    "running": False,
+    "stage": "",
+    "message": "",
+    "username": "",
+    "label": "",
+    "account": None,
+    "shops": 0,
+    "error": "",
+    "probe_error": "",
+    "started_at": "",
+    "finished_at": "",
+    "cancel": False,
+}
+
+
+def _run_account_login(req: "AccountLoginRequest") -> None:
+    def on_stage(stage: str, message: str) -> None:
+        _LOGIN["stage"] = stage
+        _LOGIN["message"] = message
+
+    try:
+        res = sf.login_and_capture(
+            req.username,
+            req.password,
+            label=req.label,
+            account_id=req.account_id,
+            timeout=req.timeout,
+            on_stage=on_stage,
+            should_cancel=lambda: bool(_LOGIN.get("cancel")),
+        )
+        if not res.get("ok"):
+            _LOGIN["error"] = res.get("error") or "登录失败"
+            return
+
+        acc = res.get("account") or {}
+        _LOGIN["account"] = acc
+
+        if req.remember:
+            pwd = req.password or sf.get_saved_password(req.username)
+            sf.remember_credentials(req.username, pwd, req.label or req.username)
+
+        # 登录成功后顺手探测店铺，省一次点击
+        if acc.get("id"):
+            _LOGIN["stage"] = "probing"
+            _LOGIN["message"] = "正在探测该账号可访问的店铺…"
+            try:
+                with sf.use_account(acc["id"]):
+                    found = sync_service.discover_and_register_shops(acc["id"])
+                _LOGIN["shops"] = len(found)
+                _LOGIN["account"] = next(
+                    (a for a in sf.list_accounts() if a["id"] == acc["id"]), acc
+                )
+            except Exception as exc:  # noqa: BLE001 - 探测失败不影响登录结果
+                _LOGIN["probe_error"] = str(exc)
+
+        invalidate_shop_access_cache()
+    except Exception as exc:  # noqa: BLE001 - 后台线程不能抛异常
+        _LOGIN["error"] = str(exc)
+    finally:
+        _LOGIN["running"] = False
+        _LOGIN["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+
+
+@app.post("/api/accounts/login")
+def accounts_login(req: AccountLoginRequest):
+    """启动半自动登录：会弹出一个 Chrome 窗口，请在里面输入图形验证码。"""
+    if _LOGIN["running"]:
+        return {"ok": False, "message": "已有登录任务在进行，请先完成或取消"}
+    _LOGIN.update({
+        "running": True, "stage": "opening", "message": "正在启动浏览器…",
+        "username": req.username, "label": req.label,
+        "account": None, "shops": 0, "error": "", "probe_error": "",
+        "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "finished_at": "", "cancel": False,
+    })
+    threading.Thread(target=_run_account_login, args=(req,), daemon=True).start()
+    return {
+        "ok": True,
+        "message": "浏览器正在打开，请在窗口里完成验证码后点「登录」",
+    }
+
+
+@app.get("/api/accounts/login/status")
+def accounts_login_status():
+    """查询半自动登录进度。"""
+    data = {k: v for k, v in _LOGIN.items() if k != "cancel"}
+    return data
+
+
+@app.post("/api/accounts/login/cancel")
+def accounts_login_cancel():
+    """取消正在进行的登录。"""
+    if not _LOGIN["running"]:
+        return {"ok": False, "message": "当前没有进行中的登录"}
+    _LOGIN["cancel"] = True
+    return {"ok": True, "message": "已请求取消"}
+
+
+@app.get("/api/accounts/credentials")
+def list_account_credentials():
+    """已记住的账号列表（不返回密码）。"""
+    return {"ok": True, "credentials": sf.list_saved_credentials()}
+
+
+@app.delete("/api/accounts/credentials/{username}")
+def delete_account_credential(username: str):
+    """忘掉某个账号的密码。"""
+    sf.remember_credentials(username, "", "")
+    return {"ok": True, "credentials": sf.list_saved_credentials()}
+
+
 @app.post("/api/cookie/grab")
 def cookie_grab():
     """通过 Playwright CDP 自动从浏览器抓取 Cookie。
@@ -574,6 +867,143 @@ def trigger_product_sync(req: SyncTriggerRequest):
 
 
 # ===========================================================================
+# 父 SKU 广告开启状态（v2.7）
+# ===========================================================================
+# 自动广告工作台要回答一个问题：「这个父体是不是已经开过广告了？」
+# 数据来自赛狐：活动列表（state）+ 活动下广告商品（sku）。判定逻辑在
+# core/ad_coverage.py，这里只负责取数 + 缓存。
+_AD_COVERAGE_CACHE: Dict[str, Dict[str, Any]] = {}
+_AD_COVERAGE_TTL = 600          # 10 分钟
+_AD_COVERAGE_LOCK = threading.Lock()
+
+
+@app.get("/api/shops/{shop_id}/ad-coverage")
+def get_ad_coverage(shop_id: str, refresh: int = 0, days: int = 60):
+    """返回该店铺每个父 SKU 的广告开启状态（已开启 / 已暂停 / 未开启）。
+
+    - ``refresh=1`` 强制重新拉取赛狐数据
+    - 结果缓存 10 分钟，避免每次切店铺都打接口
+    - 拉取失败时返回 ``ok=false``，前端显示「未知」而不是误判成「未开启」
+    """
+    now = time.time()
+    with _AD_COVERAGE_LOCK:
+        cached = _AD_COVERAGE_CACHE.get(shop_id)
+    if cached and not refresh and now - cached["ts"] < _AD_COVERAGE_TTL:
+        return {**cached["data"], "cached": True}
+
+    parents = db.get_parent_sku_map(shop_id)
+    if not parents:
+        return {
+            "ok": False,
+            "error": "本地库暂无该店铺商品，请先同步商品后再判断广告状态",
+            "shop_id": shop_id,
+            "coverage": {},
+        }
+    if not sf.has_valid_cookies():
+        return {
+            "ok": False,
+            "error": "赛狐 Cookie 未配置或已过期，无法读取广告状态",
+            "shop_id": shop_id,
+            "coverage": {},
+        }
+
+    try:
+        shop = db.get_shop(shop_id) or {}
+        acc_id = shop.get("account_id") or ""
+        ctx = sf.use_account(acc_id) if acc_id else contextlib.nullcontext()
+        with ctx:
+            data = ad_coverage.fetch_coverage(
+                shop_id, parents, days=max(7, min(int(days or 60), 180))
+            )
+    except Exception as exc:  # noqa: BLE001 - 失败要降级成「未知」
+        return {
+            "ok": False,
+            "error": f"读取赛狐广告数据失败：{exc}",
+            "shop_id": shop_id,
+            "coverage": {},
+        }
+
+    payload = {"ok": True, "generated_at": datetime.datetime.now().isoformat(timespec="seconds"), **data}
+    with _AD_COVERAGE_LOCK:
+        _AD_COVERAGE_CACHE[shop_id] = {"ts": now, "data": payload}
+    return {**payload, "cached": False}
+
+
+# ===========================================================================
+# 商品图片代理（v2.6）
+# ===========================================================================
+# 为什么需要它：商品图存在亚马逊图床（m.media-amazon.com）。国内网络直连经常
+# 超时、被运营商拦截，或者被图床的防盗链挡住，浏览器里就只剩白色方块。改成
+# 「浏览器 → 本机后端 → 亚马逊」由服务端取图并落盘缓存，只要同步能跑通，图片
+# 就一定显示得出来；同一张图只下载一次，后续走本地文件。
+_IMG_ALLOWED_HOSTS = (
+    "m.media-amazon.com",
+    "images-na.ssl-images-amazon.com",
+    "images-eu.ssl-images-amazon.com",
+    "images-fe.ssl-images-amazon.com",
+    "ws-na.amazon-adsystem.com",
+)
+_IMG_CACHE_DIR = os.path.join(paths.DATA_DIR, "image_cache")
+_IMG_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
+@app.get("/api/image-proxy")
+def image_proxy(u: str):
+    """代理亚马逊商品图并本地缓存，避免浏览器直连失败导致图片空白。
+
+    只允许亚马逊图床域名（防 SSRF）；按 URL 的 sha1 落盘，命中缓存直接返回。
+    """
+    raw = (u or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="缺少图片地址")
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in ("http", "https") or parsed.hostname not in _IMG_ALLOWED_HOSTS:
+        raise HTTPException(status_code=403, detail="不允许的图片域名")
+
+    # 缩略图换成 200px 版本，40px 的小图放大后太糊
+    cache_key = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+    cache_path = os.path.join(_IMG_CACHE_DIR, cache_key)
+    if os.path.exists(cache_path):
+        with open(cache_path, "rb") as fh:
+            data = fh.read()
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
+
+    try:
+        req = urllib.request.Request(
+            raw,
+            headers={"User-Agent": _IMG_UA, "Accept": "image/*,*/*;q=0.8"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = resp.read()
+            ctype = resp.headers.get("Content-Type") or "image/jpeg"
+    except Exception as exc:  # noqa: BLE001 - 取图失败不该 500 打断页面
+        raise HTTPException(status_code=502, detail=f"取图失败：{exc}") from exc
+
+    if not data:
+        raise HTTPException(status_code=502, detail="取图失败：空响应")
+    try:
+        os.makedirs(_IMG_CACHE_DIR, exist_ok=True)
+        with open(cache_path, "wb") as fh:
+            fh.write(data)
+    except OSError:
+        pass  # 缓存写失败不影响返回
+    return Response(
+        content=data,
+        media_type=ctype.split(";")[0].strip() or "image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+# ===========================================================================
 # v2.0 手动广告模块：搜索词数据
 # ===========================================================================
 @app.post("/api/search-terms/query")
@@ -605,47 +1035,100 @@ def query_search_terms(req: SearchTermQueryRequest):
     }
 
 
+def _parse_date_range(start_date: str, end_date: str, max_days: int = 92) -> List[str]:
+    """把起止日期展开成逐日列表（含两端），最多 ``max_days`` 天。"""
+    try:
+        start = datetime.date.fromisoformat(str(start_date))
+        end = datetime.date.fromisoformat(str(end_date))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"日期格式错误：{exc}") from exc
+    if end < start:
+        start, end = end, start
+    days = (end - start).days + 1
+    if days > max_days:
+        raise HTTPException(
+            status_code=400, detail=f"区间过长（{days} 天），单次最多 {max_days} 天"
+        )
+    return [(start + datetime.timedelta(days=i)).isoformat() for i in range(days)]
+
+
 @app.post("/api/sync/search-terms")
 def trigger_search_sync(req: SyncTriggerRequest):
-    """手动触发搜索词数据拉取。
+    """手动触发搜索词数据拉取（关键词 + 投放 ASIN 双维度）。
 
-    - 指定 ``shop_id``：只同步该店铺
-    - 指定 ``target_date``：只同步该日期
-    - 否则按 ``days`` 回补最近 N 天（默认 1 = 仅昨天）
+    三种用法：
+    - ``start_date`` + ``end_date``：按用户所选区间逐日同步（手动广告页用）
+    - ``target_date``：只同步该日期
+    - 都不传：按 ``days`` 回补最近 N 天（默认 1 = 仅昨天）
+
+    ``force=False``（默认）时**跳过本地已有数据的日期**，只补缺口，
+    这样反复点「查询并同步」不会每次都把整个区间重拉一遍。
     """
     try:
+        if req.start_date and req.end_date:
+            dates = _parse_date_range(req.start_date, req.end_date)
+        elif req.target_date:
+            dates = [req.target_date]
+        else:
+            days = max(1, min(int(req.days or 1), 30))
+            today = datetime.date.today()
+            dates = [
+                (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(1, days + 1)
+            ]
+
+        # 目标店铺：指定了就只同步它；没指定就同步当前账号下的全部店铺，
+        # 每家用**自己归属的账号** Cookie，否则会大面积「没有店铺访问权限」。
         if req.shop_id:
             shop = db.get_shop(req.shop_id)
-            shop_name = shop["shop_name"] if shop else ""
-            if req.target_date:
-                dates = [req.target_date]
-            else:
-                days = max(1, min(int(req.days or 1), 30))
-                today = datetime.date.today()
-                dates = [
-                    (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-                    for i in range(1, days + 1)
-                ]
-            if req.account_id:
-                with sf.use_account(req.account_id):
-                    result = [
-                        sync_service.sync_search_terms_for_shop(
-                            req.shop_id, shop_name, d
-                        )
-                        for d in dates
-                    ]
-            else:
-                result = [
-                    sync_service.sync_search_terms_for_shop(
-                        req.shop_id, shop_name, d
-                    )
-                    for d in dates
-                ]
+            targets = [(req.shop_id, (shop or {}).get("shop_name", "") or "")]
         else:
-            result = sync_service.sync_search_terms_all_shops(
-                req.target_date or None, req.days or 1, req.account_id or ""
-            )
-        return {"ok": True, "results": result if isinstance(result, list) else [result]}
+            aid = req.account_id or sf.active_account_id()
+            targets = [
+                (s["shop_id"], s.get("shop_name") or "")
+                for s in db.list_shops(aid)
+            ]
+
+        results: List[Dict[str, Any]] = []
+        skipped = 0
+        synced = 0
+        for sid, sname in targets:
+            todo = dates
+            if not req.force:
+                todo = [d for d in dates if db.count_rows_for_date(sid, d)["total"] == 0]
+                skipped += len(dates) - len(todo)
+            if not todo:
+                continue
+            shop_row = db.get_shop(sid) or {}
+            acc_id = shop_row.get("account_id") or req.account_id or ""
+            ctx = sf.use_account(acc_id) if acc_id else contextlib.nullcontext()
+            with ctx:
+                for d in todo:
+                    # 单店单日失败（权限 / 限流 / 网络）不该让整个区间前功尽弃，
+                    # 记一条 error 继续跑下一天，前端会把它显示成「权限提示」
+                    try:
+                        results.append(
+                            sync_service.sync_search_terms_for_shop(sid, sname, d)
+                        )
+                        synced += 1
+                    except Exception as exc:  # noqa: BLE001
+                        results.append({
+                            "shop_id": sid,
+                            "shop_name": sname,
+                            "report_date": d,
+                            "error": str(exc),
+                        })
+
+        return {
+            "ok": True,
+            "dates": dates,
+            "shops": len(targets),
+            "synced": synced,      # 实际拉取的「店铺 × 日期」组合数
+            "skipped": skipped,    # 因本地已有数据而跳过的组合数
+            "results": results,
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"同步失败：{exc}")
 
@@ -719,6 +1202,98 @@ def sync_all_accounts(req: SyncAllAccountsRequest):
 def sync_all_accounts_status():
     """查询全量同步进度与结果摘要。"""
     data = dict(_ACCOUNT_SYNC)
+    results = data.get("results") or []
+    data["summary"] = {
+        "accounts": len(data.get("accounts") or []),
+        "rows": len(results),
+        "errors": sum(1 for r in results if r.get("error")),
+    }
+    return data
+
+
+# ---------------------------------------------------------------------------
+# v2.5 按日期区间补同步（专治历史缺口：某店某几天从没跑过）
+# ---------------------------------------------------------------------------
+_RANGE_SYNC: Dict[str, Any] = {
+    "running": False,
+    "start_date": "",
+    "end_date": "",
+    "started_at": "",
+    "finished_at": "",
+    "accounts": [],
+    "results": [],
+    "error": "",
+}
+
+
+def _run_range_sync(
+    start_date: str, end_date: str, account_ids: List[str]
+) -> None:
+    _RANGE_SYNC.update({
+        "running": True, "error": "",
+        "start_date": start_date, "end_date": end_date,
+        "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "finished_at": "", "accounts": [], "results": [],
+    })
+    try:
+        out = sync_service.sync_all_accounts_range(
+            start_date, end_date, account_ids or None
+        )
+        _RANGE_SYNC["accounts"] = out.get("accounts", [])
+        _RANGE_SYNC["results"] = out.get("results", [])
+    except Exception as exc:  # noqa: BLE001 - 后台任务不能把异常抛给线程
+        _RANGE_SYNC["error"] = str(exc)
+    finally:
+        _RANGE_SYNC["running"] = False
+        _RANGE_SYNC["finished_at"] = datetime.datetime.now().isoformat(
+            timespec="seconds"
+        )
+        invalidate_shop_access_cache()
+
+
+@app.post("/api/sync/search-terms/range")
+def sync_search_terms_range(req: SyncRangeRequest):
+    """按指定日期区间补同步搜索词 + 投放 ASIN（后台执行，前端轮询进度）。"""
+    if _RANGE_SYNC["running"]:
+        return {"ok": False, "message": "已有区间补同步任务在跑，请等待完成"}
+    if _ACCOUNT_SYNC["running"]:
+        return {"ok": False, "message": "全量同步正在运行，请等它结束后再补区间"}
+    if not sf.list_accounts():
+        raise HTTPException(status_code=400, detail="还没有配置任何赛狐账号")
+
+    try:
+        d0 = datetime.date.fromisoformat(str(req.start_date).strip())
+        d1 = datetime.date.fromisoformat(str(req.end_date).strip())
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="日期格式应为 YYYY-MM-DD，例如 2026-11-01"
+        )
+    if d0 > d1:
+        d0, d1 = d1, d0
+    span = (d1 - d0).days + 1
+    if span > 90:
+        raise HTTPException(status_code=400, detail=f"单次最多补 90 天，当前 {span} 天")
+
+    start_s = d0.strftime("%Y-%m-%d")
+    end_s = d1.strftime("%Y-%m-%d")
+    threading.Thread(
+        target=_run_range_sync,
+        args=(start_s, end_s, req.account_ids),
+        daemon=True,
+    ).start()
+    return {
+        "ok": True,
+        "message": f"已开始补同步 {start_s} ~ {end_s}（{span} 天）",
+        "start_date": start_s,
+        "end_date": end_s,
+        "days": span,
+    }
+
+
+@app.get("/api/sync/search-terms/range/status")
+def sync_search_terms_range_status():
+    """查询区间补同步进度与结果摘要。"""
+    data = dict(_RANGE_SYNC)
     results = data.get("results") or []
     data["summary"] = {
         "accounts": len(data.get("accounts") or []),

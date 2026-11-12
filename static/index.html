@@ -267,6 +267,14 @@
               中位数客单价：<strong class="text-slate-800">¥{{ fmt(currentShopData.median_price) }}</strong> ·
               当前展示：<strong>{{ filteredProducts.length }}</strong> / {{ currentShopData.products.length }} 个 ·
               已勾选：<strong class="text-blue-600">{{ selectedProducts.length }}</strong> 个
+              <span v-if="adCoverageSummary" class="ml-2 pl-2 border-l border-slate-200">
+                广告：<strong class="text-emerald-600">已开 {{ adCoverageSummary.enabled }}</strong>
+                / <strong class="text-slate-500">未开 {{ adCoverageSummary.none + adCoverageSummary.paused }}</strong>
+                <span v-if="adCoverageSummary.paused" class="text-slate-400">（其中已暂停 {{ adCoverageSummary.paused }}）</span>
+              </span>
+              <span v-else-if="adCoverageError" class="ml-2 text-rose-500" :title="adCoverageError">
+                · 广告状态读取失败
+              </span>
             </div>
           </div>
 
@@ -275,12 +283,26 @@
                     class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
               {{ isAllFilteredSelected ? '取消勾选当前' : '全选当前结果' }}
             </button>
+            <button @click="createAutoViaApi" :disabled="selectedProducts.length === 0 || autoCreating || !autoShopId"
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
+                    :title="autoShopId ? '调用赛狐接口直接创建自动广告活动（不用再上传 Bulk 表）' : '接口创建需要先载入本地商品库（Excel 数据没有店铺 ID）'">
+              {{ autoCreating ? '创建中…' : `⚡ 接口直接创建 (${selectedProducts.length})` }}
+            </button>
             <button @click="exportBulkExcel" :disabled="selectedProducts.length === 0 || exporting"
                     class="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
               {{ exporting ? '生成中…' : `导出亚马逊 Bulk Excel (${selectedProducts.length})` }}
             </button>
           </div>
         </section>
+
+        <!-- 接口直推结果 -->
+        <div v-if="autoCreateMsg"
+             class="p-3 rounded-lg border text-[11px] leading-5 whitespace-pre-line"
+             :class="autoCreateMsg.startsWith('接口创建失败')
+                     ? 'bg-rose-50 border-rose-200 text-rose-800'
+                     : 'bg-emerald-50 border-emerald-200 text-emerald-800'">
+          {{ autoCreateMsg }}
+        </div>
 
         <!-- 商品表 -->
         <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -297,6 +319,18 @@
                     父 SKU
                     <span class="ml-1 text-xs font-bold text-blue-600">{{ skuSortIcon }}</span>
                   </th>
+                  <th class="p-3 text-center whitespace-nowrap" title="该父 SKU 在赛狐里是否已有「已开启」的广告活动（暂停/归档不算）">
+                    广告状态
+                    <button @click="refreshAdCoverage" :disabled="adCoverageLoading"
+                            class="ml-1 align-middle text-[10px] text-blue-600 hover:text-blue-800 disabled:opacity-40"
+                            :title="adCoverageLoading ? '正在读取赛狐广告数据…' : '重新读取赛狐广告数据'">↻</button>
+                    <div class="mt-1 flex justify-center">
+                      <label class="inline-flex items-center gap-1 text-[10px] font-normal text-slate-500 cursor-pointer">
+                        <input type="checkbox" v-model="adOnlyUnoffered" class="accent-blue-600 w-3 h-3" />
+                        只看未开
+                      </label>
+                    </div>
+                  </th>
                   <th class="p-3">清洗后品名（核心首词中文 · 可编辑）</th>
                   <th class="p-3 text-center">子体数</th>
                   <th class="p-3 text-right">客单均价 (JPY)</th>
@@ -311,14 +345,35 @@
                     <input type="checkbox" v-model="item.selected" @change="recalculateBudgets" class="accent-blue-600 w-4 h-4" />
                   </td>
                   <td class="p-2 text-center">
-                    <img v-if="item.image_url && !imgErrors[item.parent_sku]" :src="item.image_url" :alt="item.parent_sku"
-                         loading="lazy"
+                    <img v-if="item.image_url && !imgErrors[item.parent_sku]" :src="imgSrc(item.image_url)" :alt="item.parent_sku"
+                         loading="lazy" referrerpolicy="no-referrer"
                          @error="imgErrors[item.parent_sku] = true"
-                         class="w-10 h-10 object-cover rounded border border-slate-200 inline-block bg-white shadow-sm
+                         class="w-12 h-12 object-contain rounded border border-slate-200 inline-block bg-white shadow-sm
                                 hover:scale-[2.4] hover:z-50 hover:relative hover:shadow-xl transition-transform duration-150 origin-left cursor-zoom-in" />
-                    <div v-else class="w-10 h-10 bg-slate-100 border border-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 mx-auto">无图</div>
+                    <div v-else class="w-12 h-12 bg-slate-50 border border-dashed border-slate-300 rounded flex items-center justify-center text-[10px] text-slate-400 mx-auto">无图</div>
                   </td>
                   <td class="p-3 font-bold text-slate-800 whitespace-nowrap">{{ item.parent_sku }}</td>
+                  <td class="p-3 text-center whitespace-nowrap">
+                    <span v-if="adStateOf(item) && adStateOf(item).enabled"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-300"
+                          :title="'已开启的活动：' + (adStateOf(item).campaigns || []).join(' / ')">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>已开启
+                    </span>
+                    <span v-else-if="adStateOf(item)"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-300"
+                          :title="adStateOf(item).state === 'paused'
+                                  ? ('有活动但已暂停：' + (adStateOf(item).paused_campaigns || []).join(' / '))
+                                  : '赛狐里没有这个父体的广告活动'">
+                      <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>{{ adStateOf(item).state === 'paused' ? '已暂停' : '未开启' }}
+                    </span>
+                    <span v-else-if="adCoverageLoading"
+                          class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-50 text-slate-400 border border-dashed border-slate-300">
+                      查询中…
+                    </span>
+                    <span v-else
+                          class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-50 text-slate-400 border border-dashed border-slate-300"
+                          :title="adCoverageError || '尚未读取广告状态，点表头 ↻ 重试'">未知</span>
+                  </td>
                   <td class="p-3">
                     <div class="flex items-center gap-1.5">
                       <input v-model="item.product_name"
@@ -422,34 +477,61 @@
             <label for="mtOnlyOrders" class="text-xs text-slate-600 cursor-pointer">只看有出单</label>
           </div>
           <div class="flex gap-2">
-            <button @click="loadSearchTerms" :disabled="mtLoading"
-                    class="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
-              {{ mtLoading ? '查询中…' : '查询' }}
-            </button>
-            <button @click="syncSearchTerms('')" :disabled="mtSyncing"
-                    class="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-600 text-xs font-medium rounded-lg whitespace-nowrap"
-                    :title="'从赛狐拉取最近 ' + syncDays + ' 天搜索词数据'">
-              {{ mtSyncing ? '同步中…' : '⬇ 同步' }}
+            <button @click="queryAndSync" :disabled="mtLoading || mtSyncing"
+                    class="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors"
+                    title="按上方所选店铺与起止日期，先同步赛狐数据（只补本地缺的日期）再自动查询；约 1~2 秒/天/店">
+              {{ mtSyncing ? '同步中…' : (mtLoading ? '查询中…' : '查询并同步') }}
             </button>
           </div>
         </div>
+        <p v-if="mtSyncMsg" class="mt-2 text-[11px] text-slate-500 leading-5 whitespace-pre-line">{{ mtSyncMsg }}</p>
       </section>
 
       <!-- 目标商品 + 投放参数 -->
       <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5">
           投放目标与参数
-          <span class="text-[11px] font-normal text-slate-400 ml-2">勾选搜索词 → 选定目标父体 → 导出 Bulk 或接口直推</span>
+          <span class="text-[11px] font-normal text-slate-400 ml-2">
+            勾选搜索词 → {{ mtTargetMode === 'row' ? '按每行 ASIN 自动建广告' : '选定目标父体' }} → 导出 Bulk 或接口直推
+          </span>
         </h2>
+
+        <!-- 投放商品来源：默认按行 ASIN 一对一，不需要选商品 -->
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <span class="text-xs font-semibold text-slate-600">投放商品来源</span>
+          <div class="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+            <button @click="mtTargetMode = 'row'"
+                    :class="mtTargetMode === 'row' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'"
+                    class="px-3 py-1.5 text-xs font-semibold transition-colors">
+              按行 ASIN（一对一）
+            </button>
+            <button @click="mtTargetMode = 'sku'"
+                    :class="mtTargetMode === 'sku' ? 'bg-slate-700 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'"
+                    class="px-3 py-1.5 text-xs font-semibold border-l border-slate-300 transition-colors">
+              手动选父 SKU
+            </button>
+          </div>
+          <span v-if="mtTargetMode === 'row'" class="text-[11px] text-emerald-700">
+            每个搜索词用该行「ASIN」列（出单商品）建 Product Ad，一词一活动，不用选商品
+          </span>
+          <span v-else class="text-[11px] text-slate-400">
+            沿用旧逻辑：所有勾选词都投到所选父体的全部子体
+          </span>
+        </div>
+
         <div class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
           <div class="md:col-span-2">
             <label class="block text-xs font-semibold text-slate-600 mb-1">目标商品（父 SKU）</label>
-            <select v-model="mtTargetSku" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select v-if="mtTargetMode === 'sku'" v-model="mtTargetSku" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">— 请选择 —</option>
               <option v-for="p in mtProducts" :key="p.parent_sku" :value="p.parent_sku">
                 {{ p.parent_sku }} · {{ p.product_name }}（{{ (p.children||[]).length }} 子体）
               </option>
             </select>
+            <div v-else class="h-[30px] flex items-center gap-1.5 px-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+              <span class="text-[11px] font-semibold text-emerald-700">✓ 自动跟随每行 ASIN</span>
+              <span class="text-[11px] text-emerald-600">（{{ mtAutoTargetableCount }} 行可用）</span>
+            </div>
           </div>
           <div class="md:col-span-2">
             <label class="block text-xs font-semibold text-slate-600 mb-1">
@@ -512,8 +594,9 @@
           </span>
         </div>
 
-        <!-- ASIN 商品投放 -->
-        <div class="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-3">
+        <!-- ASIN 商品投放：只在「投放产生 ASIN」维度出现 -->
+        <div v-if="mtDimension === 'asin'"
+             class="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-3">
           <div class="text-xs font-semibold text-slate-700 pb-1.5 mr-1">🎯 ASIN 商品投放</div>
           <div>
             <label class="block text-[11px] font-semibold text-slate-500 mb-1">ASIN 竞价 (JPY)</label>
@@ -541,18 +624,21 @@
             <div class="text-xs text-slate-500">
               共 <strong class="text-slate-800">{{ mtTotal }}</strong> 条匹配 ·
               已勾选 <strong class="text-blue-600">{{ mtSelected.length }}</strong> 个关键词
-              <span v-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
+              <span v-if="mtTargetMode === 'row'" class="ml-2 text-emerald-600">
+                → 按行 ASIN 一对一（<strong class="text-emerald-700">{{ mtAutoTargetableCount }}</strong> 个 ASIN）
+              </span>
+              <span v-else-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
             </div>
             <div class="flex items-center gap-2">
               <button @click="toggleSelectAllTerms" :disabled="!mtRows.length"
                       class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs rounded-lg font-medium transition-colors">
                 {{ mtAllSelected ? '取消全选' : '全选当前结果' }}
               </button>
-              <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetSku || mtExporting"
+              <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetReady || mtExporting"
                       class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
                 {{ mtExporting ? '生成中…' : '导出手动广告 Bulk' }}
               </button>
-              <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetSku || mtCreating"
+              <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetReady || mtCreating"
                       class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
                       title="直接推送到赛狐后台创建广告活动">
                 {{ mtCreating ? '创建中…' : '⚡ 接口直推创建' }}
@@ -626,7 +712,9 @@
                 <th class="p-3" :title="mtDimension === 'asin' ? '赛狐「投放产生 ASIN」报表里的商品页 ASIN，可直接做商品投放' : '该搜索词成交商品的 ASIN，来自搜索词报表'">
                   {{ mtDimension === 'asin' ? '投放 ASIN' : 'ASIN' }}
                 </th>
-                <th class="p-3 text-center w-20">
+                <!-- 「投 ASIN」只在「投放产生 ASIN」维度有意义：
+                     搜索词维度下 ASIN 列本身就是投放商品，再勾一次等于重复投放自己 -->
+                <th v-if="mtDimension === 'asin'" class="p-3 text-center w-20">
                   投 ASIN
                   <div class="mt-1 flex justify-center">
                     <input type="checkbox" :checked="mtAllAsinTargeted" @change="toggleAllAsinTargets"
@@ -673,7 +761,7 @@
                   </span>
                   <span v-else class="text-slate-300">-</span>
                 </td>
-                <td class="p-3 text-center">
+                <td v-if="mtDimension === 'asin'" class="p-3 text-center">
                   <input type="checkbox" v-model="r.target_asin" :disabled="!asinOf(r)"
                          class="accent-blue-600 w-4 h-4" :title="asinOf(r) ? '把 ' + asinOf(r) + ' 作为商品投放' : '该行没有 ASIN'" />
                 </td>
@@ -704,10 +792,10 @@
                 <td class="p-3 text-slate-400 truncate max-w-[180px]" :title="r.campaign_name">{{ r.campaign_name }}</td>
               </tr>
               <tr v-if="!mtRows.length">
-                <td colspan="16" class="p-10 text-center text-slate-400">
-                  {{ mtLoading ? '查询中…' : (mtDimension === 'asin'
-                      ? '暂无「投放产生 ASIN」数据 — 请先点「⬇ 同步」从赛狐拉取（同步会同时抓搜索词与 ASIN 两个维度）'
-                      : '暂无搜索词数据 — 请调整筛选条件，或先点「⬇ 同步」从赛狐拉取') }}
+                <td :colspan="mtDimension === 'asin' ? 16 : 15" class="p-10 text-center text-slate-400">
+                  {{ (mtLoading || mtSyncing) ? '查询中…' : (mtDimension === 'asin'
+                      ? '暂无「投放产生 ASIN」数据 — 点上方「查询并同步」，会按所选店铺与日期区间从赛狐拉取'
+                      : '暂无搜索词数据 — 请调整筛选条件，或点「查询并同步」从赛狐拉取') }}
                 </td>
               </tr>
             </tbody>
@@ -740,21 +828,70 @@
               {{ accounts.length }} 个账号
             </span>
           </span>
-          <button @click="showAddAccount = !showAddAccount"
-                  class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors">
-            {{ showAddAccount ? '收起' : '＋ 添加账号' }}
-          </button>
+          <div class="flex items-center gap-2">
+            <button @click="toggleLoginPanel"
+                    class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ showLoginPanel ? '收起' : '🔑 账号密码登录' }}
+            </button>
+            <button @click="showAddAccount = !showAddAccount"
+                    class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ showAddAccount ? '收起' : '＋ 粘贴 Cookie' }}
+            </button>
+          </div>
         </h2>
 
         <p class="text-[11px] text-slate-500 leading-5 mb-3">
-          一个赛狐账号只能看到<strong class="text-slate-700">自己权限内</strong>的店铺。有多个账号时，把每个账号的 Cookie 分别加进来，
+          一个赛狐账号只能看到<strong class="text-slate-700">自己权限内</strong>的店铺。有多个账号时，把每个账号分别加进来，
           点下面的「全量同步」就会<strong class="text-slate-700">逐个账号各拉一遍</strong>，登录态互不覆盖，也不会再串号。
         </p>
+
+        <!-- 账号密码登录（半自动：图形验证码人工输入） -->
+        <div v-if="showLoginPanel" class="mb-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <div class="text-[11px] text-emerald-800 leading-5 mb-2.5">
+            点「打开浏览器登录」会弹出一个 Chrome 窗口，账号密码<strong>自动填好</strong>，
+            你只需要输入<strong>图形验证码</strong>并点「登录」。登录成功后 Cookie 会自动存进账号池，不用再手工复制。
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+            <input v-model="loginLabel" placeholder="账号备注，如：账号B（备用账号）"
+                   class="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <input v-model="loginUsername" placeholder="赛狐账号（手机号/用户名）" list="savedAccounts"
+                   class="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <datalist id="savedAccounts">
+              <option v-for="c in savedCredentials" :key="c.username" :value="c.username">{{ c.label }}</option>
+            </datalist>
+            <input v-model="loginPassword" type="password" :placeholder="loginPasswordPlaceholder"
+                   class="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <button @click="startAccountLogin" :disabled="loginTask.running || !loginUsername.trim()"
+                    class="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ loginTask.running ? '等待登录中…' : '🌐 打开浏览器登录' }}
+            </button>
+          </div>
+          <div class="flex items-center gap-3 mt-2 flex-wrap">
+            <label class="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer select-none">
+              <input type="checkbox" v-model="loginRemember" class="accent-emerald-600">
+              记住密码（存在项目外的 config 目录，不进 Git）
+            </label>
+            <button v-if="loginTask.running" @click="cancelAccountLogin"
+                    class="px-2.5 py-1 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] rounded font-medium transition-colors">
+              取消
+            </button>
+            <span v-if="loginTask.message" :class="['text-[11px] font-medium',
+                  loginTask.error ? 'text-rose-600' : (loginTask.stage === 'done' ? 'text-emerald-700' : 'text-slate-600')]">
+              {{ loginTask.error || loginTask.message }}
+            </span>
+          </div>
+          <div v-if="loginTask.stage === 'done' && loginTask.account"
+               class="mt-2 text-[11px] text-emerald-800 bg-white border border-emerald-200 rounded px-2.5 py-1.5">
+            ✓ 已保存账号 <strong>{{ loginTask.account.label }}</strong>（{{ loginTask.account.id }}），
+            探测到 <strong>{{ loginTask.shops }}</strong> 家店铺
+            <span v-if="loginTask.probe_error" class="text-amber-700">（探测提示：{{ loginTask.probe_error }}）</span>
+          </div>
+        </div>
 
         <!-- 添加账号 -->
         <div v-if="showAddAccount" class="mb-4 p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-            <input v-model="newAccountLabel" placeholder="账号备注，如：账号A（大成组）"
+            <input v-model="newAccountLabel" placeholder="账号备注，如：账号A（主账号）"
                    class="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
             <textarea v-model="newAccountCookie" rows="3"
                       placeholder="粘贴该账号的 Cookie（支持整段请求标头 / Copy as cURL / document.cookie）"
@@ -859,6 +996,43 @@
             正在同步… 开始于 {{ (allSync.started_at || '').replace('T', ' ') }}。可以切到别的页面，后台会继续跑。
           </div>
           <div v-else-if="allSyncMsg" class="mt-2.5 p-2.5 bg-emerald-50 border border-emerald-200 rounded text-[11px] text-emerald-800 leading-5 whitespace-pre-line">{{ allSyncMsg }}</div>
+        </div>
+
+        <!-- 按日期区间补同步：补历史缺口（某店某几天从没跑过） -->
+        <div class="mt-4 pt-4 border-t border-slate-100">
+          <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <span class="text-xs font-semibold text-slate-700">
+              按日期区间补同步
+              <span class="font-normal text-slate-400">（补历史缺口，含首尾两天）</span>
+            </span>
+            <div class="flex items-center gap-1.5">
+              <button @click="fillRangePreset(7)" class="px-2 py-1 bg-white border border-slate-300 hover:border-slate-400 text-slate-600 text-[11px] rounded font-medium transition-colors">近 7 天</button>
+              <button @click="fillRangePreset(30)" class="px-2 py-1 bg-white border border-slate-300 hover:border-slate-400 text-slate-600 text-[11px] rounded font-medium transition-colors">近 30 天</button>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-end gap-2">
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">开始日期</label>
+              <input type="date" v-model="rangeStart"
+                     class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">结束日期</label>
+              <input type="date" v-model="rangeEnd"
+                     class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <button @click="syncRange" :disabled="rangeSync.running || allSync.running"
+                    class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
+              {{ rangeSync.running ? '补同步中…' : '补同步该区间（关键词 + ASIN）' }}
+            </button>
+            <span class="text-[11px] text-slate-400 pb-1.5">
+              逐日 × 逐店 × 双维度；单次最多 90 天，已存在的日期会覆盖更新
+            </span>
+          </div>
+          <div v-if="rangeSync.running" class="mt-2.5 p-2.5 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800 leading-5">
+            正在补 {{ rangeSync.start_date }} ~ {{ rangeSync.end_date }} … 开始于 {{ (rangeSync.started_at || '').replace('T', ' ') }}。可以切到别的页面，后台会继续跑。
+          </div>
+          <div v-else-if="rangeSyncMsg" class="mt-2.5 p-2.5 bg-emerald-50 border border-emerald-200 rounded text-[11px] text-emerald-800 leading-5 whitespace-pre-line">{{ rangeSyncMsg }}</div>
         </div>
       </section>
 
@@ -1205,6 +1379,79 @@
         const loading = ref(false);
         const loadingText = ref('');
         const exporting = ref(false);
+        // v2.6 自动广告接口直推（与手动广告的「接口直推」同链路）
+        const autoCreating = ref(false);
+        const autoCreateMsg = ref('');
+        // 店铺名 → 店铺 ID（同一页面可能载入多个店铺，切店铺时要跟着换）
+        const shopIdByName = ref({});
+
+        /* ============ 父 SKU 广告开启状态（v2.7） ============ */
+        // adCoverage: {店铺名: {父SKU: {enabled, state, campaigns, paused_campaigns}}}
+        const adCoverage = ref({});
+        // adCoverageMeta: {店铺名: {loading, error, summary, generated_at}}
+        const adCoverageMeta = ref({});
+        const adOnlyUnoffered = ref(false);   // 只看未开启（含已暂停 / 未知）
+
+        const adCoverageLoading = computed(() =>
+          !!(adCoverageMeta.value[selectedShop.value] || {}).loading);
+        const adCoverageError = computed(() =>
+          (adCoverageMeta.value[selectedShop.value] || {}).error || '');
+        const adCoverageSummary = computed(() =>
+          (adCoverageMeta.value[selectedShop.value] || {}).summary || null);
+
+        // 取某一行商品的广告状态（null = 还没读到 / 读取失败）
+        const adStateOf = (item) => {
+          if (!item) return null;
+          const shop = item._shop || selectedShop.value;
+          const map = adCoverage.value[shop] || {};
+          return map[String(item.parent_sku)] || null;
+        };
+
+        const loadAdCoverage = async (shopName, sid, force = false) => {
+          if (!sid) return;
+          adCoverageMeta.value = {
+            ...adCoverageMeta.value,
+            [shopName]: { ...(adCoverageMeta.value[shopName] || {}), loading: true, error: '' }
+          };
+          try {
+            const res = await fetch(
+              `/api/shops/${encodeURIComponent(sid)}/ad-coverage?refresh=${force ? 1 : 0}`);
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok || d.ok === false) {
+              adCoverageMeta.value = {
+                ...adCoverageMeta.value,
+                [shopName]: {
+                  loading: false,
+                  error: d.error || d.detail || '读取广告状态失败',
+                  summary: null
+                }
+              };
+              return;
+            }
+            adCoverage.value = { ...adCoverage.value, [shopName]: d.coverage || {} };
+            adCoverageMeta.value = {
+              ...adCoverageMeta.value,
+              [shopName]: {
+                loading: false,
+                error: '',
+                summary: d.summary || null,
+                generated_at: d.generated_at || '',
+                cached: !!d.cached
+              }
+            };
+          } catch (e) {
+            adCoverageMeta.value = {
+              ...adCoverageMeta.value,
+              [shopName]: { loading: false, error: e.message || '网络异常', summary: null }
+            };
+          }
+        };
+
+        const refreshAdCoverage = () => {
+          const sid = shopIdByName.value[selectedShop.value] || selectedDbShopId.value || '';
+          if (!sid) { showToast('请先载入本地商品库'); return; }
+          loadAdCoverage(selectedShop.value, sid, true);
+        };
         const refreshingNames = ref(false);
         const dragging = ref(false);
         const error = ref('');
@@ -1220,6 +1467,15 @@
         const loadingDb = ref(false);
 
         const fmt = (n) => Number(n || 0).toLocaleString('ja-JP');
+
+        // 商品图统一走后端代理：国内直连亚马逊图床常被拦，浏览器里会只剩白块。
+        // 后端取图 + 本地缓存，只要同步能跑通图片就一定能显示。
+        const imgSrc = (url) => {
+          const u = String(url || '').trim();
+          if (!u) return '';
+          if (!/^https?:\/\//i.test(u)) return u;
+          return '/api/image-proxy?u=' + encodeURIComponent(u);
+        };
 
         const currentShopData = computed(() => allShopsData.value[selectedShop.value] || null);
 
@@ -1247,6 +1503,10 @@
               (p.parent_sku || '').toLowerCase().includes(kw) ||
               (p.product_name || '').toLowerCase().includes(kw)
             );
+          }
+          // 只看未开启：把已经有开启广告的父体藏掉，专注补没开的
+          if (adOnlyUnoffered.value) {
+            list = list.filter(p => !(adStateOf(p) || {}).enabled);
           }
           const sorted = [...list];
           if (sortMode.value === 'price_desc') {
@@ -1331,6 +1591,7 @@
 
             allShopsData.value = json.shops || {};
             imgErrors.value = {};
+            shopIdByName.value = {};   // Excel 没有 shop_id，接口直推按钮会自动禁用
             // 记录词库自动生成的品名，用于识别「手动改名」
             Object.keys(allShopsData.value).forEach(shop => {
               (allShopsData.value[shop].products || []).forEach(p => {
@@ -1390,6 +1651,7 @@
             keys.forEach(k => { allShopsData.value[k] = shops[k]; });
             imgErrors.value = {};
             keys.forEach(shop => {
+              shopIdByName.value[shop] = sid;   // 接口直推需要知道该店铺的 shop_id
               (shops[shop].products || []).forEach(p => {
                 p._shop = shop;
                 p._auto_name = p.product_name;
@@ -1399,6 +1661,8 @@
             selectedShop.value = keys[0];
             dataSource.value = 'db';
             initShop(selectedShop.value);
+            // 异步读取「哪些父体已经开过广告」，不阻塞商品列表渲染
+            loadAdCoverage(selectedShop.value, sid);
             fileName.value = `本地库 · ${json.shop_name || sid}（${json.total_parents} 个父体）`;
             showToast(`已从本地库载入 ${json.total_parents} 个父体`);
           } catch (e) {
@@ -1469,6 +1733,63 @@
             error.value = e.message || '导出异常';
           } finally {
             exporting.value = false;
+          }
+        };
+
+        /* ============ 自动广告：接口直接创建（v2.6 新增） ============ */
+        // 只有从本地商品库载入的数据才有 shop_id；Excel 导入的没有，按钮自动禁用
+        const autoShopId = computed(() => {
+          if (dataSource.value !== 'db') return '';
+          return shopIdByName.value[selectedShop.value] || selectedDbShopId.value || '';
+        });
+
+        const createAutoViaApi = async () => {
+          const selected = selectedProducts.value;
+          if (!selected.length) return;
+          if (!autoShopId.value) {
+            showToast('请先「载入本地商品库」再接口创建（Excel 数据没有店铺 ID）');
+            return;
+          }
+          const ok = window.confirm(
+            `将通过赛狐接口直接创建 ${selected.length} 个自动广告活动（每个父体一个活动，挂该父体全部子体）。\n\n` +
+            `创建后需到赛狐后台/亚马逊后台手动关闭，本地无法撤回。确认继续？`
+          );
+          if (!ok) return;
+          autoCreating.value = true;
+          autoCreateMsg.value = '';
+          try {
+            const res = await fetch('/api/auto-ads/create-via-api', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                shop_id: autoShopId.value,
+                products: selected.map(p => ({
+                  parent_sku: p.parent_sku,
+                  product_name: p.product_name,
+                  assigned_budget: p.assigned_budget,
+                  suggested_budget: p.suggested_budget,
+                  children: p.children
+                })),
+                settings: settings.value
+              })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || '创建失败');
+            const s = d.summary || {};
+            const failed = (d.results || []).filter(r => !r.success);
+            autoCreateMsg.value = `接口创建完成：成功 ${s.success ?? 0} 个 / 失败 ${s.failed ?? 0} 个`;
+            if (failed.length) {
+              autoCreateMsg.value += '\n' + failed.slice(0, 8).map(r =>
+                `· ${r.campaign_name}：${(r.errors || ['未知错误']).join('；')}`).join('\n');
+              showToast(`创建完成：成功 ${s.success ?? 0}，失败 ${s.failed ?? 0}`);
+            } else {
+              showToast(`已创建 ${s.success ?? 0} 个自动广告活动`);
+            }
+          } catch (e) {
+            autoCreateMsg.value = '接口创建失败：' + (e.message || '网络异常');
+            showToast(autoCreateMsg.value);
+          } finally {
+            autoCreating.value = false;
           }
         };
 
@@ -1633,6 +1954,24 @@
         /* ============ 多赛狐账号池 ============ */
         const accounts = ref([]);
         const showAddAccount = ref(false);
+        // 账号密码半自动登录
+        const showLoginPanel = ref(false);
+        const loginLabel = ref('');
+        const loginUsername = ref('');
+        const loginPassword = ref('');
+        const loginRemember = ref(true);
+        const savedCredentials = ref([]);
+        const loginTask = ref({
+          running: false, stage: '', message: '', account: null,
+          shops: 0, error: '', probe_error: ''
+        });
+        let loginTimer = null;
+        const loginHasSavedPassword = computed(() => {
+          const u = loginUsername.value.trim();
+          return !!u && savedCredentials.value.some(c => c.username === u && c.has_password);
+        });
+        const loginPasswordPlaceholder = computed(() =>
+          loginHasSavedPassword.value ? '留空 = 用已记住的密码' : '赛狐登录密码');
         const newAccountLabel = ref('');
         const newAccountCookie = ref('');
         const newAccountMerge = ref(true);
@@ -1647,6 +1986,95 @@
         const allSyncDays = ref(7);
         const allSyncMsg = ref('');
         let allSyncTimer = null;
+        // 按日期区间补同步（补历史缺口）
+        const rangeSync = ref({
+          running: false, start_date: '', end_date: '', started_at: '',
+          finished_at: '', accounts: [], results: [], error: '', summary: {}
+        });
+        const rangeStart = ref('');
+        const rangeEnd = ref('');
+        const rangeSyncMsg = ref('');
+        let rangeSyncTimer = null;
+
+        const loadCredentials = async () => {
+          try {
+            const res = await fetch('/api/accounts/credentials');
+            const d = await res.json();
+            savedCredentials.value = d.credentials || [];
+          } catch (e) { /* 静默 */ }
+        };
+
+        const toggleLoginPanel = () => {
+          showLoginPanel.value = !showLoginPanel.value;
+          if (showLoginPanel.value) loadCredentials();
+        };
+
+        const pollLogin = async () => {
+          try {
+            const res = await fetch('/api/accounts/login/status');
+            const d = await res.json();
+            loginTask.value = d;
+            if (d.running) { loginTimer = setTimeout(pollLogin, 2000); return; }
+            if (d.stage === 'done' && !d.error) {
+              loginPassword.value = '';
+              await loadAccounts();
+              await checkCookie();
+              await loadDbShops();
+              await checkShopAccess(true);
+              await loadCredentials();
+              showToast('登录成功，账号已加入账号池');
+            }
+          } catch (e) { loginTimer = setTimeout(pollLogin, 3000); }
+        };
+
+        const startAccountLogin = async () => {
+          const username = loginUsername.value.trim();
+          if (!username) { showToast('请填写赛狐账号（手机号/用户名）'); return; }
+          if (!loginPassword.value.trim() && !loginHasSavedPassword.value) {
+            showToast('请填写密码'); return;
+          }
+          if (loginTask.value.running) { showToast('已有登录任务在进行'); return; }
+          loginTask.value = {
+            running: true, stage: 'opening', message: '正在启动浏览器…',
+            account: null, shops: 0, error: '', probe_error: ''
+          };
+          try {
+            const res = await fetch('/api/accounts/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                username,
+                password: loginPassword.value,
+                label: loginLabel.value.trim(),
+                remember: loginRemember.value,
+                timeout: 300
+              })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              showToast(d.detail || '启动失败');
+              loginTask.value = { ...loginTask.value, running: false };
+              return;
+            }
+            if (!d.ok) {
+              showToast(d.message || '启动失败');
+              loginTask.value = { ...loginTask.value, running: false };
+              return;
+            }
+            showToast('浏览器已打开，请完成图形验证码');
+            pollLogin();
+          } catch (e) {
+            showToast('启动失败：' + (e.message || '网络异常'));
+            loginTask.value = { ...loginTask.value, running: false };
+          }
+        };
+
+        const cancelAccountLogin = async () => {
+          try {
+            await fetch('/api/accounts/login/cancel', { method: 'POST' });
+            showToast('已请求取消，等待浏览器关闭');
+          } catch (e) { showToast('取消失败：' + (e.message || '网络异常')); }
+        };
 
         const loadAccounts = async () => {
           try {
@@ -1791,6 +2219,66 @@
             allSync.value = { ...allSync.value, running: true, started_at: new Date().toISOString() };
             showToast('已开始后台同步所有账号');
             pollAllSync();
+          } catch (e) { showToast('启动失败：' + (e.message || '网络异常')); }
+        };
+
+        /* ---- 按日期区间补同步（专治历史缺口） ---- */
+        const isoDay = (offset) => {
+          const d = new Date();
+          d.setDate(d.getDate() + offset);
+          const p = (n) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        };
+        const fillRangePreset = (days) => {
+          rangeEnd.value = isoDay(-1);        // 默认到昨天：当天数据赛狐还没跑完
+          rangeStart.value = isoDay(-days);
+          rangeSyncMsg.value = '';
+        };
+        fillRangePreset(30);
+
+        const pollRangeSync = async () => {
+          try {
+            const res = await fetch('/api/sync/search-terms/range/status');
+            const d = await res.json();
+            rangeSync.value = d;
+            if (d.running) { rangeSyncTimer = setTimeout(pollRangeSync, 3000); return; }
+            const s = d.summary || {};
+            const errs = (d.results || []).filter(r => r.error);
+            rangeSyncMsg.value = d.error
+              ? `补同步失败：${d.error}`
+              : `补同步完成 ${d.start_date || ''} ~ ${d.end_date || ''}：`
+                + `${s.accounts || 0} 个账号 / ${s.rows || 0} 条结果 / ${s.errors || 0} 条提示`
+                + (errs.length
+                  ? '\n' + errs.slice(0, 8).map(e =>
+                      `⚠️ ${e.account_label ? '[' + e.account_label + '] ' : ''}${e.error}`).join('\n')
+                  : '');
+            await loadAccounts();
+            await loadDbShops();
+            await checkShopAccess(true);
+          } catch (e) { rangeSyncTimer = setTimeout(pollRangeSync, 5000); }
+        };
+
+        const syncRange = async () => {
+          if (!accounts.value.length) { showToast('还没有配置账号'); return; }
+          if (!rangeStart.value || !rangeEnd.value) { showToast('请先选择起止日期'); return; }
+          if (rangeSync.value.running) { showToast('补同步正在跑，请稍候'); return; }
+          if (allSync.value.running) { showToast('全量同步正在跑，请等它结束再补区间'); return; }
+          rangeSyncMsg.value = '';
+          try {
+            const res = await fetch('/api/sync/search-terms/range', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ start_date: rangeStart.value, end_date: rangeEnd.value })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.detail || '启动失败'); return; }
+            if (!d.ok) { showToast(d.message || '启动失败'); return; }
+            rangeSync.value = {
+              ...rangeSync.value, running: true,
+              start_date: d.start_date, end_date: d.end_date
+            };
+            showToast(d.message || '已开始补同步');
+            pollRangeSync();
           } catch (e) { showToast('启动失败：' + (e.message || '网络异常')); }
         };
 
@@ -1972,8 +2460,12 @@
         const mtTotal = ref(0);
         const mtLoading = ref(false);
         const mtSyncing = ref(false);
+        const mtSyncMsg = ref('');   // 「查询并同步」的同步结果提示
         const mtProducts = ref([]);
         const mtTargetSku = ref('');
+        // 投放商品来源：row=按每行 ASIN 自动建 Product Ad（默认，不用选商品）
+        //               sku=沿用旧逻辑，投所选父体的全部子体
+        const mtTargetMode = ref('row');
         // 匹配类型改成多选勾选：勾选几个，每个搜索词就生成几条 Keyword
         const MATCH_TYPE_OPTIONS = [
           { value: 'exact',  label: '精准', tip: '精准匹配 exact' },
@@ -2060,9 +2552,32 @@
           const a = String(r.asin || '').trim().toUpperCase();
           return /^B0[A-Z0-9]{8}$/i.test(a) ? a : '';
         };
+        // 该行对应的 MSKU：优先用报表自带，缺失时按 ASIN 去商品库里反查
+        const mskuOf = (r) => {
+          const own = String((r && r.msku) || '').trim();
+          if (own) return own;
+          const asin = asinOf(r);
+          if (!asin) return '';
+          for (const p of mtProducts.value) {
+            for (const c of (p.children || [])) {
+              if (String(c.asin || '').trim().toUpperCase() === asin) {
+                return String(c.msku || '').trim();
+              }
+            }
+          }
+          return '';
+        };
         // 只统计「已勾选搜索词」行：未勾选的行不会生成活动，不应计入实际投放数
         const mtAsinTargetCount = computed(() =>
           mtSelected.value.filter(r => r.target_asin && asinOf(r)).length);
+        // 「按行 ASIN」模式下，真正能建出商品广告的行数（必须有合法 ASIN）
+        const mtAutoTargetableCount = computed(() =>
+          mtSelected.value.filter(r => !!asinOf(r)).length);
+        // 目标是否就绪：row 模式看勾选行里有没有 ASIN，sku 模式看有没有选父体
+        const mtTargetReady = computed(() =>
+          mtTargetMode.value === 'row'
+            ? mtAutoTargetableCount.value > 0
+            : !!mtTargetSku.value);
         const mtAllAsinTargeted = computed(() => {
           const candidates = mtRows.value.filter(r => asinOf(r));
           return candidates.length > 0 && candidates.every(r => r.target_asin);
@@ -2092,16 +2607,70 @@
           showToast(target ? `已勾选 ${n} 个 ASIN 商品投放` : '已取消全部 ASIN 商品投放');
         };
 
-        /* ---- 来源活动名清洗：去掉末尾时间戳 ---- */
+        /* ---- 来源活动名清洗：只保留「SKU + 产品名」 ----
+           赛狐里的活动名往往长这样（分隔符五花八门，空格也算）：
+             lyl5-亚克力桌ーC-自动投放-15:59
+             hua226 犬小屋 屋外用 大型犬 手动
+             HL121 冷酒器 -20260828 10:20:52.933-15
+             Y086-龙珠-手动关键词投放
+           后面那些「C / 自动投放 / 手动关键词投放 / 时间戳 / 复制 1」都是噪音，
+           拼进新活动名只会越来越长。规则：
+             1. 第一个 8 位日期（20260801）之后整段丢弃（原有行为）
+             2. 先按 - _ ー , ， 切段，再按空格切词
+             3. 开头连续的 ASCII 词当作 SKU（允许被 - 拆成多段）
+             4. 跳过噪音词（自动/手动/精准/词组/宽泛/投放/关键词/匹配/SP…）
+             5. 产品名 = 从第一个非噪音词开始，遇到噪音词就停
+                （所以「犬小屋 屋外用 大型犬 手动」里的空格会保留）
+        */
+        const CAMPAIGN_NOISE_EXACT = /^(\d+|sp|sb|sd|asin|auto|manual|copy|a|b|c)$/i;
+        const CAMPAIGN_NOISE_SUB = /(自动|手动|精准|词组|宽泛|广告|投放|关键词|匹配|复制)/;
+        const isCampaignNoise = (t) => {
+          if (!t) return true;
+          if (CAMPAIGN_NOISE_EXACT.test(t)) return true;
+          return CAMPAIGN_NOISE_SUB.test(t);
+        };
+
         const cleanSourceCampaignName = (raw) => {
           let s = String(raw || '').trim();
           if (!s) return '手动拓词';
-          // 第一个 8 位日期（20260801）之后都是时间戳 / 序号 / 「复制 N」，全部截掉
+
+          // 1) 时间戳截断
           const m = s.match(/\d{8}/);
           if (m) s = s.slice(0, m.index);
-          s = s.replace(/[\s\-_、,，.。:：]+$/g, '').trim();
-          s = s.replace(/\s{2,}/g, ' ').trim();
-          return s || '手动拓词';
+          s = s.replace(/[\s\-_、,，.。:：ー]+$/g, '').trim();
+          if (!s) return '手动拓词';
+
+          // 2) 硬分隔符 → 再按空格切词
+          const tokens = s
+            .split(/[\-_ー,，]+/)
+            .flatMap(x => x.trim().split(/\s+/))
+            .map(x => x.trim())
+            .filter(Boolean);
+          if (!tokens.length) return '手动拓词';
+
+          // 3) SKU：开头连续的 ASCII 词（非噪音）
+          const sku = [];
+          let i = 0;
+          while (i < tokens.length && /^[A-Za-z0-9]+$/.test(tokens[i]) && !isCampaignNoise(tokens[i])) {
+            sku.push(tokens[i]);
+            i++;
+          }
+
+          // 4) 跳过噪音词
+          while (i < tokens.length && isCampaignNoise(tokens[i])) i++;
+
+          // 5) 产品名：从第一个非噪音词开始，遇噪音即停
+          const nameParts = [];
+          while (i < tokens.length && !isCampaignNoise(tokens[i])) {
+            nameParts.push(tokens[i]);
+            i++;
+          }
+
+          let out = sku.join('-');
+          const name = nameParts.join(' ');
+          if (name) out = out ? `${out}-${name}` : name;
+          out = out.replace(/\s{2,}/g, ' ').trim();
+          return out || '手动拓词';
         };
 
         const mtMatchSummary = computed(() =>
@@ -2126,8 +2695,10 @@
             .replace(/\{搜索词\}/g, opts.single ? '搜索词拓词' : kw)
             .replace(/\{匹配类型\}/g, mtMatchSuffix(r))
             .replace(/\{ASIN\}/g, asinOf(r))
-            .replace(/\{MSKU\}/g, (r && r.msku) || '')
-            .replace(/\{父SKU\}/g, mtTargetSku.value || '');
+            .replace(/\{MSKU\}/g, mskuOf(r))
+            .replace(/\{父SKU\}/g, mtTargetMode.value === 'row'
+              ? (mskuOf(r) || asinOf(r) || '')
+              : (mtTargetSku.value || ''));
           // 后缀为空 / 无占位符模板时，清掉尾部多余的分隔符
           name = name.replace(/_{2,}/g, '_').replace(/[\s_\-]+$/g, '').trim();
           return name || `${base}_手动_${kw}`;
@@ -2263,6 +2834,55 @@
           }
         };
 
+        /* ---- 查询并同步（v2.6）：按所选店铺 + 起止日期同步，再查询 ---- */
+        // 之前「同步」按钮固定按 syncDays（1 天）拉、且不看店铺下拉，所以选了区间
+        // 和店铺也不生效。现在合并成一个按钮，同步范围严格跟随上面两个日期框。
+        const queryAndSync = async () => {
+          if (mtSyncing.value) return;
+          const sid = mtShopId.value || '';
+          const start = mtStartDate.value || '';
+          const end = mtEndDate.value || '';
+          mtSyncMsg.value = '';
+          mtSyncing.value = true;
+          try {
+            if (start && end) {
+              const scope = sid
+                ? (dbShops.value.find(s => String(s.shop_id) === String(sid))?.shop_name || sid)
+                : '全部店铺';
+              mtSyncMsg.value = `正在同步 ${scope}：${start} ~ ${end}（只补本地缺的日期）…`;
+              const res = await fetch('/api/sync/search-terms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  shop_id: sid,
+                  start_date: start,
+                  end_date: end,
+                  account_id: sid ? accountIdOfShop(sid) : '',
+                  force: false
+                })
+              });
+              const d = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error(d.detail || '同步失败');
+              const rs = d.results || [];
+              const errs = rs.filter(r => r.error);
+              const kw = rs.reduce((s, r) => s + Number(r.search_terms_inserted ?? r.inserted ?? 0), 0);
+              const asin = rs.reduce((s, r) => s + Number(r.asin_rows_inserted ?? 0), 0);
+              mtSyncMsg.value = d.synced
+                ? `同步完成：拉取 ${d.synced} 个「店铺×日期」组合，入库 搜索词 ${kw} 条 / 投放ASIN ${asin} 条`
+                  + (errs.length ? `；${errs.length} 条权限提示（该店铺不属于当前账号）` : '')
+                : `所选区间本地已有数据，跳过同步（${d.skipped || 0} 个组合）`;
+              if (errs.length) mtSyncMsg.value += '\n' + errs.slice(0, 3).map(r => '⚠️ ' + (r.error || '')).join('\n');
+            }
+            await loadSearchTerms();
+          } catch (e) {
+            mtSyncMsg.value = '同步失败：' + (e.message || '网络异常');
+            showToast(mtSyncMsg.value);
+            await loadSearchTerms();   // 同步失败也把本地已有数据查出来
+          } finally {
+            mtSyncing.value = false;
+          }
+        };
+
         // 载入手动广告可选商品（复用本地库 payload 结构）
         const loadManualProducts = async () => {
           const sid = mtShopId.value || selectedDbShopId.value ||
@@ -2282,11 +2902,11 @@
         };
 
         const buildManualCampaigns = () => {
-          const p = mtProducts.value.find(x => x.parent_sku === mtTargetSku.value);
-          if (!p) return [];
           const selected = mtSelected.value;
           if (!selected.length) return [];
-          const children = (p.children || []).map(c => ({ msku: c.msku, asin: c.asin }));
+          const auto = mtTargetMode.value === 'row';
+          const p = mtProducts.value.find(x => x.parent_sku === mtTargetSku.value);
+          if (!auto && !p) return [];
           const matchTypes = mtMatchTypes.value.length ? mtMatchTypes.value : ['exact'];
           // 一个搜索词 × 勾选的每种匹配类型 = 一条 Keyword；
           // 「投放产生 ASIN」维度是商品投放，没有关键词/匹配类型，只生成 Product Targeting
@@ -2298,20 +2918,25 @@
           const asinsOf = (rows) => Array.from(new Set(
             rows.filter(r => r.target_asin).map(asinOf).filter(Boolean)
           ));
-          const common = {
-            parent_sku: p.parent_sku,
-            product_name: p.product_name,
-            children,
-            products: children,
+          const budget = {
             daily_budget: Number(mtDailyBudget.value) || 100,
             default_bid: Number(mtDefaultBid.value) || 25,
             asin_bid: Number(mtAsinBid.value) || Number(mtDefaultBid.value) || 25
           };
+          // 旧逻辑：所有勾选词都投到所选父体的全部子体
+          const skuCommon = auto ? null : {
+            parent_sku: p.parent_sku,
+            product_name: p.product_name,
+            children: (p.children || []).map(c => ({ msku: c.msku, asin: c.asin })),
+            products: (p.children || []).map(c => ({ msku: c.msku, asin: c.asin }))
+          };
           // 合并为一个活动：所有勾选的搜索词 + 所有勾选的 ASIN 进同一活动
-          if (mtNameMode.value === 'single') {
+          // （「按行 ASIN」模式下不合并——每个词投自己的 ASIN，合并就退化成多商品广告）
+          if (!auto && mtNameMode.value === 'single') {
             const cname = finalNameForRow(selected[0]);
             return [{
-              ...common,
+              ...budget,
+              ...skuCommon,
               campaign_name: cname,
               group_name: cname,
               keywords: selected.flatMap(kwOf),
@@ -2319,21 +2944,43 @@
             }];
           }
           // 默认：每个搜索词一个独立活动；活动名取表格里该行文本框最终显示的值
-          return selected.map(r => {
+          const built = selected.map(r => {
             const cname = finalNameForRow(r);
+            if (auto) {
+              // 按行 ASIN 一对一：Product Ad 只放该行出单的那个 ASIN，不铺全子体
+              const asin = asinOf(r);
+              if (!asin) return null;
+              const msku = mskuOf(r);
+              return {
+                ...budget,
+                parent_sku: msku || asin,
+                product_name: msku || asin,
+                children: [{ msku, asin }],
+                products: [{ msku, asin }],
+                campaign_name: cname,
+                group_name: cname,
+                keywords: kwOf(r),
+                asins: asinsOf([r])
+              };
+            }
             return {
-              ...common,
+              ...budget,
+              ...skuCommon,
               campaign_name: cname,
               group_name: cname,
               keywords: kwOf(r),
               asins: asinsOf([r])
             };
-          });
+          }).filter(Boolean);
+          if (auto && built.length < selected.length) {
+            showToast(`有 ${selected.length - built.length} 行没有 ASIN，已跳过`);
+          }
+          return built;
         };
 
         const exportManualBulk = async () => {
           const campaigns = buildManualCampaigns();
-          if (!campaigns.length) { showToast('请先选择目标商品并勾选搜索词'); return; }
+          if (!campaigns.length) { showToast(mtTargetMode.value === 'row' ? '请先勾选带 ASIN 的搜索词' : '请先选择目标商品并勾选搜索词'); return; }
           mtExporting.value = true;
           try {
             const res = await fetch('/api/manual-ads/export-bulk', {
@@ -2350,7 +2997,7 @@
             const a = document.createElement('a');
             const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             a.href = url;
-            a.download = `${mtTargetSku.value || 'manual'}_SP_Bulk_Manual_${today}.xlsx`;
+            a.download = `${mtTargetMode.value === 'row' ? 'rowasin' : (mtTargetSku.value || 'manual')}_SP_Bulk_Manual_${today}.xlsx`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -2367,7 +3014,7 @@
 
         const createManualViaApi = async () => {
           const campaigns = buildManualCampaigns();
-          if (!campaigns.length) { showToast('请先选择目标商品并勾选搜索词'); return; }
+          if (!campaigns.length) { showToast(mtTargetMode.value === 'row' ? '请先勾选带 ASIN 的搜索词' : '请先选择目标商品并勾选搜索词'); return; }
           const sid = mtShopId.value || selectedDbShopId.value ||
                       (dbShops.value[0] && dbShops.value[0].shop_id) || '';
           if (!sid) { showToast('请先选择店铺'); return; }
@@ -2489,7 +3136,7 @@
 
         return {
           /* 通用 */
-          activeTab, switchTab, toast, showToast, fmt,
+          activeTab, switchTab, toast, showToast, fmt, imgSrc,
           /* 自动广告 v10 */
           allShopsData, shopList, selectedShop, currentShopData, filteredProducts,
           selectedProducts, assignedTotal, isAllFilteredSelected, skuSearchKeyword,
@@ -2498,6 +3145,9 @@
           refreshingNames, refreshNameMatching, isNameManuallyEdited,
           fileName, loading, loadingText, exporting, dragging, error, headerRow, resolvedCols,
           handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel,
+          autoCreating, autoCreateMsg, autoShopId, createAutoViaApi,
+          adCoverage, adCoverageMeta, adOnlyUnoffered, adCoverageLoading,
+          adCoverageError, adCoverageSummary, adStateOf, loadAdCoverage, refreshAdCoverage,
           /* 数据源 */
           dataSource, showExcel, dbShops, selectedDbShopId, loadingDb, onDbShopChange, loadShopIntoAuto,
           /* 词库 */
@@ -2508,8 +3158,12 @@
           checkCookie, updateCookie, grabCookie,
           /* 多赛狐账号 */
           accounts, showAddAccount, newAccountLabel, newAccountCookie, newAccountMerge,
+          showLoginPanel, loginLabel, loginUsername, loginPassword, loginRemember,
+          savedCredentials, loginTask, loginPasswordPlaceholder, loginHasSavedPassword,
+          toggleLoginPanel, startAccountLogin, cancelAccountLogin,
           addingAccount, addAccountMsg, addAccountOk, probingAccount,
           allSync, allSyncDays, allSyncMsg, loadAccounts, addAccount,
+          rangeSync, rangeStart, rangeEnd, rangeSyncMsg, syncRange, fillRangePreset,
           activateAccount, probeAccount, renameAccount, removeAccount,
           syncAllAccounts, pollAllSync,
           /* 店铺同步 */
@@ -2522,6 +3176,7 @@
           mtBidBase, mtBidFactor, applyBidFactor, applyFixedBid,
           MATCH_TYPE_OPTIONS, mtMatchTypes, toggleMatchType, mtMatchSummary,
           mtAsinBid, mtAsinTargetCount, mtAllAsinTargeted, toggleAllAsinTargets,
+          mtTargetMode, mtTargetReady, mtAutoTargetableCount, mskuOf,
           mtNameTemplate, mtNameMode, mtNameMatchMode, mtNameOverrides,
           nameKeyOf, nameForRow, finalNameForRow, isNameOverridden,
           setNameOverride, clearNameOverride, clearNameOverrides,

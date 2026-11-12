@@ -30,7 +30,7 @@ try {
 
 // ---------------------------------------------------------------- 造数据
 const SHOPS = {
-  '三头牛-JP': {
+  '店铺C-JP': {
     median_price: 2000,
     total_parents: 2,
     products: [
@@ -40,7 +40,7 @@ const SHOPS = {
         child_count: 1, avg_price: 1500, median_ratio: 0.75, image_url: '', selected: true, assigned_budget: 100 },
     ],
   },
-  '二当家-JP': {
+  '店铺D-JP': {
     median_price: 3000,
     total_parents: 1,
     products: [
@@ -52,9 +52,9 @@ const SHOPS = {
 
 // 模拟服务端词库（刷新后应得到的结果）
 const REMATCH_TABLE = {
-  '三头牛-JP||mj355': '压泥器',
-  '三头牛-JP||llc16': '塑料袋',
-  '二当家-JP||k001': '折叠桌',
+  '店铺C-JP||mj355': '压泥器',
+  '店铺C-JP||llc16': '塑料袋',
+  '店铺D-JP||k001': '折叠桌',
 };
 
 const fetchLog = [];
@@ -157,11 +157,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(50);
   const shops = vm.allShopsData;
   check('两个店铺均载入', Object.keys(shops).length === 2, JSON.stringify(Object.keys(shops)));
-  const p355 = shops['三头牛-JP'].products.find(p => p.parent_sku === 'mj355');
-  const p16 = shops['三头牛-JP'].products.find(p => p.parent_sku === 'llc16');
-  const pk = shops['二当家-JP'].products.find(p => p.parent_sku === 'k001');
+  const p355 = shops['店铺C-JP'].products.find(p => p.parent_sku === 'mj355');
+  const p16 = shops['店铺C-JP'].products.find(p => p.parent_sku === 'llc16');
+  const pk = shops['店铺D-JP'].products.find(p => p.parent_sku === 'k001');
   check('_auto_name 已记录', p355._auto_name === '压泥器' && p16._auto_name === '塑料袋', `${p355._auto_name}/${p16._auto_name}`);
-  check('_shop 已标记', p355._shop === '三头牛-JP' && pk._shop === '二当家-JP');
+  check('_shop 已标记', p355._shop === '店铺C-JP' && pk._shop === '店铺D-JP');
   check('初始无「手动」标记', vm.isNameManuallyEdited(p355) === false);
   check('加载表格后按钮启用', findRefreshBtn().disabled === false);
 
@@ -203,19 +203,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('改回自动名后恢复非手动', vm.isNameManuallyEdited(p16) === false);
 
   console.log('\n[6] 未收录商品：回填兜底名并计数');
-  const saved = REMATCH_TABLE['二当家-JP||k001'];
-  delete REMATCH_TABLE['二当家-JP||k001'];   // 让服务端判定为「未收录」
+  const saved = REMATCH_TABLE['店铺D-JP||k001'];
+  delete REMATCH_TABLE['店铺D-JP||k001'];   // 让服务端判定为「未收录」
   await vm.refreshNameMatching();
   await sleep(40);
   check('未收录回填兜底名', pk.product_name === '兜底名', pk.product_name);
   check('提示含「未收录」', String(vm.toast).includes('未收录'), vm.toast);
-  REMATCH_TABLE['二当家-JP||k001'] = saved;
+  REMATCH_TABLE['店铺D-JP||k001'] = saved;
 
   console.log('\n[7] 无表格时点刷新给出提示');
   vm.allShopsData = {};
   await vm.refreshNameMatching();
   await sleep(20);
-  check('空数据时提示先上传', String(vm.toast).includes('请先上传'), vm.toast);
+  check('空数据时提示先加载商品', String(vm.toast).includes('请先加载商品数据'), vm.toast);
 
   console.log('\n' + '='.repeat(78));
   console.log(`结果：PASS ${OK}  FAIL ${FAIL}`);
