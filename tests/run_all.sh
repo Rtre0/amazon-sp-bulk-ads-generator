@@ -43,7 +43,7 @@ echo "==================================================================="
 
 for f in tests/test_1_noun_matching.py tests/test_2_end_to_end.py \
          tests/test_3_dictionary_io.py tests/test_4_http_smoke.py \
-         tests/test_5_v7_quantity_and_rematch.py; do
+         tests/test_5_v7_quantity_and_rematch.py tests/test_8_ad_coverage.py; do
   run_py "$f"
 done
 

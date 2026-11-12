@@ -31,10 +31,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 数据库文件位置
+#   统一走 core.paths：设了 SELLFOX_HOME 就在项目外，否则仍在项目内（向后兼容）
 # ---------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_DIR = os.path.join(BASE_DIR, "data")
-DB_PATH = os.path.join(DB_DIR, "local_store.db")
+from core.paths import BASE_DIR, DATA_DIR as DB_DIR, DB_PATH  # noqa: E402
 
 # 线程锁（sqlite3 默认不允许跨线程共享连接）
 _local = threading.local()
@@ -338,6 +337,29 @@ def get_products_grouped_by_parent(shop_id: str) -> List[Dict[str, Any]]:
             groups[pkey]["raw_name"] = raw
 
     return list(groups.values())
+
+
+def get_parent_sku_map(shop_id: str) -> Dict[str, List[str]]:
+    """返回 ``{父SKU: [子体 MSKU, ...]}``。
+
+    用途：判断「这个父体是否已经在广告里」——广告商品行给的是 MSKU，
+    得先知道每个 MSKU 归属哪个父体。
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT parent_sku, msku, sku FROM products WHERE shop_id=?", (shop_id,)
+    ).fetchall()
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        parent = str(r["parent_sku"] or "").strip()
+        if not parent:
+            continue
+        bucket = out.setdefault(parent, [])
+        for val in (r["msku"], r["sku"]):
+            sku = str(val or "").strip()
+            if sku and sku not in bucket:
+                bucket.append(sku)
+    return out
 
 
 def count_products(shop_id: str) -> int:
@@ -828,6 +850,28 @@ def query_search_terms(
     return _attach_order_dates(
         rows, "ad_search_terms_daily", "search_term", shop_id, start_date, end_date
     )
+
+
+def count_rows_for_date(shop_id: str, report_date: str) -> Dict[str, int]:
+    """某店铺某一天已入库的行数（关键词 / 投放 ASIN 两个维度）。
+
+    用途：手动广告页「查询并同步」时只补本地没有的日期，已同步过的直接跳过，
+    避免每次查询都把整个区间重新拉一遍。
+    """
+    conn = get_conn()
+    kw = conn.execute(
+        "SELECT COUNT(*) AS c FROM ad_search_terms_daily"
+        " WHERE shop_id = ? AND report_date = ?",
+        (shop_id, report_date),
+    ).fetchone()
+    asin = conn.execute(
+        "SELECT COUNT(*) AS c FROM ad_search_asin_daily"
+        " WHERE shop_id = ? AND report_date = ?",
+        (shop_id, report_date),
+    ).fetchone()
+    kw_n = kw["c"] if kw else 0
+    asin_n = asin["c"] if asin else 0
+    return {"keyword": kw_n, "asin": asin_n, "total": kw_n + asin_n}
 
 
 def count_search_terms(

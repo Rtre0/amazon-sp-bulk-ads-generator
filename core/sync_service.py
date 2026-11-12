@@ -494,6 +494,53 @@ def sync_search_terms_all_shops(
     为什么要「回补 N 天」：单日出单很少（实测某店 30 天仅 57 单），
     只看昨天常常一条出单词都没有。回补 7 天才能凑出足够的拓词样本。
     """
+    if target_date:
+        dates = [target_date]
+    else:
+        days = max(1, min(int(days or 1), 30))  # 夹取 1~30 天
+        today = datetime.date.today()
+        dates = [
+            (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(1, days + 1)
+        ]
+    return _sync_search_terms_dates(dates, account_id)
+
+
+def sync_search_terms_range(
+    start_date: str,
+    end_date: str,
+    account_id: str = "",
+) -> List[Dict[str, Any]]:
+    """按**显式日期区间**补同步搜索词（含首尾两天）。
+
+    与 ``sync_search_terms_all_shops`` 的唯一区别是日期从哪来：
+    那边是「从昨天往前推 N 天」，这边是「你指哪段就补哪段」，
+    专治历史缺口 —— 例如某店 11-01~11-03 从来没被跑过。
+
+    仍然逐日、逐店、逐维度拉取：一次拉整个区间会翻页，赛狐排序不稳定会漏行。
+    """
+    try:
+        d0 = datetime.date.fromisoformat(str(start_date).strip())
+        d1 = datetime.date.fromisoformat(str(end_date).strip())
+    except ValueError as exc:
+        raise ValueError(f"日期格式应为 YYYY-MM-DD（{exc}）") from exc
+    if d0 > d1:
+        d0, d1 = d1, d0
+    span = (d1 - d0).days + 1
+    if span > 90:
+        raise ValueError(f"单次最多补 90 天，当前 {span} 天")
+    dates = [
+        (d0 + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+        for i in range(span)
+    ]
+    return _sync_search_terms_dates(dates, account_id)
+
+
+def _sync_search_terms_dates(
+    dates: List[str],
+    account_id: str = "",
+) -> List[Dict[str, Any]]:
+    """按给定日期列表同步搜索词（逐日 × 逐店 × 双维度）。"""
     acc = sf.get_account(account_id or None)
     aid = (acc or {}).get("id", "") or account_id
     shops = db.list_shops(aid) if aid else db.list_shops()
@@ -514,17 +561,6 @@ def sync_search_terms_all_shops(
                 "shop_name": "-",
                 "error": "未能发现任何店铺：账号下没有广告活动或商品",
             }]
-
-    # 计算要同步的日期列表
-    if target_date:
-        dates = [target_date]
-    else:
-        days = max(1, min(int(days or 1), 30))  # 夹取 1~30 天
-        today = datetime.date.today()
-        dates = [
-            (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-            for i in range(1, days + 1)
-        ]
 
     results: List[Dict[str, Any]] = []
     registered = {str(s["shop_id"]): s["shop_name"] for s in shops}
@@ -691,6 +727,73 @@ def sync_all_accounts(
             "account_label": label,
             "shops": len(acc.get("shops") or []),
             "rows": len(acc_rows),
+            "errors": acc_errors,
+        })
+
+    return {"accounts": summaries, "results": all_results}
+
+
+def sync_all_accounts_range(
+    start_date: str,
+    end_date: str,
+    account_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """遍历所有账号，按**显式日期区间**补同步搜索词双维度。
+
+    与 ``sync_all_accounts(kind="search")`` 的区别只在日期来源：
+    那边「往前推 N 天」，这边「补指定区间」，用于填历史缺口。
+    """
+    accounts = sf.list_accounts()
+    if account_ids:
+        wanted = {str(x) for x in account_ids}
+        accounts = [a for a in accounts if a["id"] in wanted]
+
+    if not accounts:
+        return {
+            "accounts": [],
+            "results": [{
+                "shop_id": "-", "shop_name": "-",
+                "error": "还没有配置任何赛狐账号，请先添加账号 Cookie。",
+            }],
+        }
+
+    all_results: List[Dict[str, Any]] = []
+    summaries: List[Dict[str, Any]] = []
+
+    for acc in accounts:
+        aid = acc["id"]
+        label = acc.get("label") or aid
+
+        if not acc.get("valid"):
+            summaries.append({
+                "account_id": aid, "account_label": label,
+                "skipped": True, "error": "Cookie 不完整或已失效，已跳过",
+            })
+            continue
+
+        with sf.use_account(aid):
+            try:
+                res = sync_search_terms_range(start_date, end_date, aid)
+            except Exception as exc:  # noqa: BLE001 - 单账号失败不拖垮其他账号
+                res = [{
+                    "shop_id": "-", "shop_name": "-",
+                    "error": f"区间补同步失败：{exc}",
+                }]
+
+        acc_errors = 0
+        for r in res:
+            r["account_id"] = aid
+            r["account_label"] = label
+            if r.get("error"):
+                acc_errors += 1
+
+        sf.mark_account_sync(aid)
+        all_results.extend(res)
+        summaries.append({
+            "account_id": aid,
+            "account_label": label,
+            "shops": len(acc.get("shops") or []),
+            "rows": len(res),
             "errors": acc_errors,
         })
 

@@ -37,13 +37,19 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COOKIE_FILE = os.path.join(BASE_DIR, "config", "sf_cookies.json")
+# 路径统一走 core.paths：设了 SELLFOX_HOME 就在项目外，否则仍在项目内
+from core.paths import (  # noqa: E402
+    BASE_DIR,
+    CONFIG_DIR,
+    COOKIE_FILE,
+    CREDENTIALS_FILE,
+    LOGIN_PROFILE_DIR,
+)
 
 # 网关前缀
 GW_CPC = "https://www.sellfox.com/api/gw/sellfox/sellfox-cpc/api/sellfox"
@@ -108,7 +114,7 @@ PRODUCT_BASE_PARAMS: Dict[str, str] = {
 #       "accounts": [
 #         {"id": "acc_1a2b3c4d", "label": "账号A",
 #          "cookies": {"sf_u": "..."},
-#          "shops": [{"shop_id": "560591", "shop_name": "大成-JP"}],
+#          "shops": [{"shop_id": "100001", "shop_name": "店铺A-JP"}],
 #          "created_at": "...", "updated_at": "...", "last_sync": "..."}
 #       ]
 #     }
@@ -378,6 +384,22 @@ def add_account(
     parsed = parse_cookie_input(cookie_str)
     if not parsed:
         return {}
+    return upsert_account_cookies(parsed, label=label, account_id=account_id, merge=merge)
+
+
+def upsert_account_cookies(
+    cookies: Dict[str, str],
+    label: str = "",
+    account_id: str = "",
+    merge: bool = True,
+) -> Dict[str, Any]:
+    """把**已解析好的** ``{name: value}`` 写进账号池（新增或更新）。
+
+    与 :func:`add_account` 的区别只是跳过文本解析，供「账号密码登录」直接落库。
+    """
+    parsed = dict(cookies or {})
+    if not parsed:
+        return {}
 
     with _STORE_LOCK:
         store = _load_store()
@@ -406,9 +428,9 @@ def add_account(
             if (label or "").strip():
                 target["label"] = label.strip()
 
-        cookies = dict(target.get("cookies") or {}) if merge else {}
-        cookies.update(parsed)
-        target["cookies"] = cookies
+        merged = dict(target.get("cookies") or {}) if merge else {}
+        merged.update(parsed)
+        target["cookies"] = merged
         target["updated_at"] = _now_iso()
 
         if not store.get("active"):
@@ -584,6 +606,213 @@ def has_valid_cookies() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 半自动登录：账号密码 + 人工输入图形验证码
+# ---------------------------------------------------------------------------
+# 赛狐登录页（密码登录）强制图形验证码，纯接口登录走不通。
+# 这里用 Playwright 打开真实浏览器：自动填账号密码，验证码由用户肉眼输入，
+# 登录成功后自动把 Cookie 抓下来写进账号池 —— 省掉「F12 找 cookie 再复制」。
+LOGIN_URL = "https://www.sellfox.com/amzup-web-main/login.html"
+
+
+def _load_credentials() -> Dict[str, Any]:
+    if not os.path.exists(CREDENTIALS_FILE):
+        return {}
+    try:
+        with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _save_credentials(data: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(CREDENTIALS_FILE), exist_ok=True)
+    tmp = CREDENTIALS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CREDENTIALS_FILE)
+
+
+def remember_credentials(username: str, password: str, label: str = "") -> None:
+    """记住账号密码（存在 SELLFOX_HOME/config，不进 Git）。"""
+    username = (username or "").strip()
+    if not username:
+        return
+    data = _load_credentials()
+    data[username] = {
+        "password": password or "",
+        "label": label or "",
+        "updated_at": _now_iso(),
+    }
+    _save_credentials(data)
+
+
+def list_saved_credentials() -> List[Dict[str, Any]]:
+    """已记住的账号列表（**不返回密码**）。"""
+    return [
+        {
+            "username": u,
+            "label": (v or {}).get("label", ""),
+            "has_password": bool((v or {}).get("password")),
+        }
+        for u, v in _load_credentials().items()
+    ]
+
+
+def get_saved_password(username: str) -> str:
+    entry = _load_credentials().get((username or "").strip()) or {}
+    return str(entry.get("password") or "")
+
+
+def _sf_cookie_dict(cookie_list: List[Dict[str, Any]]) -> Dict[str, str]:
+    """从 Playwright 的 cookie 列表里挑出 sellfox.com 的键值对。"""
+    out: Dict[str, str] = {}
+    for c in cookie_list or []:
+        domain = str(c.get("domain") or "")
+        if "sellfox.com" not in domain:
+            continue
+        name = str(c.get("name") or "").strip()
+        value = c.get("value")
+        if name and value is not None:
+            out[name] = str(value)
+    return out
+
+
+def login_and_capture(
+    username: str,
+    password: str = "",
+    label: str = "",
+    account_id: str = "",
+    timeout: int = 300,
+    on_stage: Optional[Callable[[str, str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+    """打开浏览器完成赛狐登录，成功后自动抓 Cookie 写进账号池。
+
+    流程：打开登录页 → 自动填账号密码 → **用户输入图形验证码并点登录** →
+    轮询到 ``sf_u`` 即视为登录成功 → 抓 cookie → 写入账号池。
+
+    Args:
+        username / password: 赛狐账号密码。``password`` 为空时尝试用已记住的。
+        label: 账号备注名（如「账号B（备用账号）」）。
+        account_id: 指定要更新的账号；为空则按登录态指纹自动判断新增/更新。
+        timeout: 等待登录的秒数（默认 300，够慢慢输验证码）。
+        on_stage: 进度回调 ``(stage, message)``。
+        should_cancel: 返回 True 时中止。
+
+    Returns:
+        ``{"ok": True, "account": {...}}`` 或 ``{"ok": False, "error": "..."}``
+    """
+
+    def _stage(s: str, m: str) -> None:
+        if on_stage:
+            try:
+                on_stage(s, m)
+            except Exception:  # noqa: BLE001 - 回调失败不影响登录
+                pass
+
+    username = (username or "").strip()
+    if not username:
+        return {"ok": False, "error": "请填写赛狐账号（手机号/用户名）"}
+    if not password:
+        password = get_saved_password(username)
+    if not password:
+        return {"ok": False, "error": "请填写密码（或先勾选「记住密码」登录一次）"}
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "Playwright 未安装：venv\\Scripts\\pip install playwright",
+        }
+
+    os.makedirs(LOGIN_PROFILE_DIR, exist_ok=True)
+    cookies: Dict[str, str] = {}
+
+    _stage("opening", "正在打开赛狐登录页…")
+    try:
+        with sync_playwright() as pw:
+            ctx = pw.chromium.launch_persistent_context(
+                LOGIN_PROFILE_DIR,
+                channel="chrome",
+                headless=False,
+                args=["--no-first-run", "--no-default-browser-check"],
+                viewport={"width": 1280, "height": 900},
+            )
+            try:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(1500)
+
+                if _sf_cookie_dict(ctx.cookies()).get("sf_u"):
+                    _stage("success", "检测到该浏览器已是登录状态，直接抓取 Cookie")
+                else:
+                    _stage("filling", "正在填入账号密码…")
+                    try:
+                        page.fill("#username", username)
+                        page.fill("#password", password)
+                    except Exception:  # noqa: BLE001 - 结构变化时退回 placeholder
+                        try:
+                            page.get_by_placeholder("请输入手机号/用户名").fill(username)
+                            page.get_by_placeholder("请输入密码").fill(password)
+                        except Exception:
+                            pass
+
+                    _stage(
+                        "waiting",
+                        "请在打开的浏览器里输入图形验证码并点「登录」，"
+                        f"登录成功后会自动继续（最多等 {timeout} 秒）",
+                    )
+                    deadline = time.time() + max(30, int(timeout))
+                    logged_in = False
+                    while time.time() < deadline:
+                        if should_cancel and should_cancel():
+                            _stage("cancelled", "已取消")
+                            return {"ok": False, "error": "已取消登录"}
+                        try:
+                            if page.is_closed():
+                                return {"ok": False, "error": "浏览器窗口被关闭，登录中止"}
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if _sf_cookie_dict(ctx.cookies()).get("sf_u"):
+                            logged_in = True
+                            break
+                        page.wait_for_timeout(1000)
+
+                    if not logged_in:
+                        return {
+                            "ok": False,
+                            "error": f"等待登录超时（{timeout} 秒），未检测到登录态",
+                        }
+                    # 登录后可能还有异步请求落 cookie，稍等再抓
+                    page.wait_for_timeout(1500)
+                    _stage("success", "登录成功，正在抓取 Cookie…")
+
+                cookies = _sf_cookie_dict(ctx.cookies())
+            finally:
+                try:
+                    ctx.close()
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001 - 浏览器启动失败统一兜底
+        return {"ok": False, "error": f"启动浏览器失败：{exc}"}
+
+    if not cookies.get("sf_u"):
+        return {"ok": False, "error": "未抓到登录态（缺少 sf_u），请确认已成功登录"}
+
+    _stage("saving", "正在写入账号池…")
+    info = upsert_account_cookies(
+        cookies, label=label or username, account_id=account_id, merge=True
+    )
+    if not info:
+        return {"ok": False, "error": "写入账号池失败"}
+
+    _stage("done", "完成")
+    return {"ok": True, "account": info}
+
+
+# ---------------------------------------------------------------------------
 # 请求封装
 # ---------------------------------------------------------------------------
 def _build_headers(content_type: str = "application/json") -> Dict[str, str]:
@@ -734,7 +963,7 @@ def discover_shops(
 ) -> List[Dict[str, str]]:
     """自动发现当前 Cookie 账号下的全部店铺。
 
-    返回 ``[{"shop_id": "563540", "shop_name": "兜兜-JP"}, ...]``
+    返回 ``[{"shop_id": "100004", "shop_name": "店铺F-JP"}, ...]``
     """
     today = datetime.date.today()
     if not end_date:
