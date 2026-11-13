@@ -3,16 +3,17 @@
 > 亚马逊 SP 广告投放工作台：**赛狐 ERP 数据进来 → 商品与搜索词分析 → 自动广告、手动广告批量开出来**。
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-v2.9.0-2f81f7">
+  <img alt="version" src="https://img.shields.io/badge/version-v2.10.0-2f81f7">
   <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">
   <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-291%20assertions-success">
 </p>
 
-> **当前版本 v2.9.0 · 2026-11-13**
+> **当前版本 v2.10.0 · 2026-11-13**
 > v2.7.0 起把 GitHub 上停留在 **v10.0.0（2026-10-30）** 的仓库补齐到最新；
 > v2.8.0 增加店铺命名与按名字排序，修掉「查询并同步」按钮无响应；
-> v2.9.0 增加平滑调价（低价多涨、高价少涨）并统一了整站视觉。
+> v2.9.0 增加平滑调价（低价多涨、高价少涨）并统一了整站视觉；
+> v2.10.0 让每个父体可以单独设 4 组竞价与 3 个广告位溢价，顶部只作为统一默认值。
 
 ## 文档
 
@@ -61,6 +62,7 @@
 | 数据与账号安全 | 数据库和 Cookie 可一键搬到项目外，仓库里不留任何真实店铺信息 |
 | 店铺命名与排序 | 给店铺起好认的名字，所有店铺下拉框按这个名字排序，不再是一串乱序的 `xxx-JP` |
 | 平滑批量调价 | 三种调价模式：智能平滑（低价多涨、高价少涨）、线性倍数、平方根阻尼，带实时试算与封顶 |
+| 逐父体竞价 / 溢价 | 顶部只设统一默认值，商品表里每个父体都能单独改 4 组竞价与 3 个广告位溢价；留空即跟随顶部，可一键铺给全部勾选项 |
 
 > 离线链路依然完全零网络依赖；在线同步与直接开广告是可选项，没配登录态也能正常用离线功能。
 
