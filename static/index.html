@@ -304,19 +304,48 @@
               <input type="number" min="0" v-model.number="settings.default_bid" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
-              <label class="block text-xs font-semibold text-slate-600 mb-1.5">搜索顶部 / 商品页面溢价 (%)</label>
-              <div class="flex gap-2">
-                <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" placeholder="Top 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" placeholder="Prod 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">广告位溢价 (%) · 统一默认</label>
+              <div class="grid grid-cols-3 gap-1.5">
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">顶部</div>
+                  <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" title="搜索顶部 Placement Top"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">其余</div>
+                  <input type="number" min="0" max="900" v-model.number="settings.placement_rest_pct" title="其余搜索页 Placement Rest Of Search"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">商品页</div>
+                  <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" title="商品页面 Placement Product Page"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
               </div>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (紧密/宽泛/同类/关联)</label>
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (JPY) · 统一默认</label>
               <div class="grid grid-cols-4 gap-1.5">
-                <input type="number" v-model.number="settings.bid_close" title="紧密匹配 close-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input type="number" v-model.number="settings.bid_loose" title="宽泛匹配 loose-match" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input type="number" v-model.number="settings.bid_substitutes" title="同类商品 substitutes" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input type="number" v-model.number="settings.bid_complements" title="关联商品 complements" class="border border-slate-300 rounded px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">紧密</div>
+                  <input type="number" v-model.number="settings.bid_close" title="紧密匹配 close-match"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">宽泛</div>
+                  <input type="number" v-model.number="settings.bid_loose" title="宽泛匹配 loose-match"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">同类</div>
+                  <input type="number" v-model.number="settings.bid_substitutes" title="同类商品 substitutes"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 text-center mb-0.5">关联</div>
+                  <input type="number" v-model.number="settings.bid_complements" title="关联商品 complements"
+                         class="w-full border border-slate-300 rounded-lg px-1 py-2 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
               </div>
             </div>
           </div>
@@ -329,7 +358,7 @@
             <div class="md:col-span-3 flex flex-wrap items-end gap-x-6 gap-y-2 pb-1">
               <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                 <input type="checkbox" v-model="settings.include_placement" class="accent-blue-600 w-4 h-4" />
-                生成广告位加成行（搜索顶部 / 商品页面）
+                生成广告位加成行（顶部 / 其余搜索页 / 商品页）
               </label>
               <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                 <input type="checkbox" v-model="settings.include_targeting" class="accent-blue-600 w-4 h-4" />
@@ -462,11 +491,15 @@
                   <th class="p-3 text-right">客单均价 (JPY)</th>
                   <th class="p-3 text-center">中位数比率</th>
                   <th class="p-3 w-36 text-right">分配预算 (JPY)</th>
+                  <th class="p-3 w-32 text-center whitespace-nowrap" title="顶部填统一默认值；这里可对单个父体覆盖，留空即跟随顶部">
+                    4 组竞价 / 溢价
+                    <div class="mt-1 text-[10px] font-normal text-slate-400">可逐行覆盖</div>
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="item in filteredProducts" :key="item.parent_sku"
-                    :class="['hover:bg-blue-50/50 transition-colors', item.selected ? '' : 'opacity-45']">
+                <template v-for="item in filteredProducts" :key="item.parent_sku">
+                <tr :class="['hover:bg-blue-50/50 transition-colors', item.selected ? '' : 'opacity-45']">
                   <td class="p-3 text-center">
                     <input type="checkbox" v-model="item.selected" @change="recalculateBudgets" class="accent-blue-600 w-4 h-4" />
                   </td>
@@ -520,16 +553,81 @@
                     <input type="number" min="0" v-model.number="item.assigned_budget"
                            class="border border-slate-300 rounded px-2 py-1 w-24 text-right text-xs font-semibold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </td>
+                  <td class="p-2 text-center">
+                    <button type="button" @click="toggleBidEditor(item)"
+                            :class="['w-full rounded-lg border px-1.5 py-1 text-[11px] font-semibold transition-colors',
+                                     bidOverrideCount(item) > 0
+                                       ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                       : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-50']"
+                            :title="bidEditorTitle(item)">
+                      {{ bidOverrideCount(item) > 0 ? ('自定义 ' + bidOverrideCount(item) + ' 项') : '跟随顶部' }}
+                      <span class="ml-0.5 text-[10px] text-slate-400">{{ bidEditorOpen === item.parent_sku ? '▲' : '▼' }}</span>
+                    </button>
+                  </td>
                 </tr>
+
+                <!-- 单个父体的竞价 / 溢价覆盖面板（v2.10） -->
+                <tr v-if="bidEditorOpen === item.parent_sku" class="bg-blue-50/40">
+                  <td colspan="10" class="px-4 py-3 border-t border-blue-100">
+                    <div class="flex flex-wrap items-end gap-x-7 gap-y-3">
+                      <div>
+                        <div class="text-[11px] font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (JPY)</div>
+                        <div class="flex gap-1.5">
+                          <div v-for="f in BID_FIELDS" :key="f.key">
+                            <div class="text-[10px] text-slate-400 text-center mb-0.5">{{ f.label }}</div>
+                            <input type="number" min="0"
+                                   :value="item[f.key] === null || item[f.key] === undefined ? '' : item[f.key]"
+                                   @input="setBidOverride(item, f.key, $event)"
+                                   :placeholder="String(settings[f.key] ?? '')"
+                                   :class="['w-16 border rounded px-1 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                            isBidOverridden(item, f.key)
+                                              ? 'border-blue-400 bg-white text-blue-700 font-semibold'
+                                              : 'border-slate-300 bg-slate-50 text-slate-600']" />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] font-semibold text-slate-600 mb-1.5">广告位溢价 (%)</div>
+                        <div class="flex gap-1.5">
+                          <div v-for="f in PLACE_FIELDS" :key="f.key">
+                            <div class="text-[10px] text-slate-400 text-center mb-0.5">{{ f.label }}</div>
+                            <input type="number" min="0" max="900"
+                                   :value="item[f.key] === null || item[f.key] === undefined ? '' : item[f.key]"
+                                   @input="setBidOverride(item, f.key, $event)"
+                                   :placeholder="String(settings[f.key] ?? '')"
+                                   :class="['w-16 border rounded px-1 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-500',
+                                            isBidOverridden(item, f.key)
+                                              ? 'border-blue-400 bg-white text-blue-700 font-semibold'
+                                              : 'border-slate-300 bg-slate-50 text-slate-600']" />
+                          </div>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button type="button" @click="clearBidOverrides(item)" :disabled="!bidOverrideCount(item)"
+                                class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                          全部跟随顶部
+                        </button>
+                        <button type="button" @click="copyBidToSelected(item)" :disabled="!bidOverrideCount(item)"
+                                class="px-3 py-1.5 rounded-lg border border-blue-300 bg-white text-[11px] font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                          应用到已勾选 ({{ selectedCount }})
+                        </button>
+                      </div>
+                      <div class="text-[10px] text-slate-400 leading-relaxed max-w-xs">
+                        灰字是该父体当前生效值。<br />留空 = 跟随顶部统一设置。
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                </template>
                 <tr v-if="!filteredProducts.length">
-                  <td colspan="8" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
+                  <td colspan="10" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap justify-between gap-2">
             <span>品名与预算可直接行内修改；切换预算模式会重算已勾选项，手动改过的值会被覆盖。
-              <strong class="text-slate-600">手动改名（标记「手动」）的品名不会被「刷新品名匹配」覆盖。</strong></span>
+              <strong class="text-slate-600">「4 组竞价 / 溢价」可对单个父体覆盖，留空即跟随顶部；手动改名的品名不会被「刷新品名匹配」覆盖。</strong></span>
             <span v-if="dataSource === 'excel'">
               表头：第 {{ headerRow }} 行
               <template v-if="resolvedCols.shop"> · 店铺列：{{ resolvedCols.shop }}</template>
@@ -1490,6 +1588,7 @@
       bidding_strategy: 'Fixed bid',
       default_bid: 25,
       placement_top_pct: 0,
+      placement_rest_pct: 0,
       placement_product_pct: 0,
       bid_close: 25,
       bid_loose: 20,
@@ -1701,9 +1800,99 @@
           }
         };
 
+        /* ============ v2.10：单个父体的竞价 / 溢价覆盖 ============ */
+        // 顶部面板是「统一默认值」，每个父体都可以单独覆盖其中任意一项；
+        // 留空（null）即表示跟随顶部 —— 之后改顶部，该父体会自动跟着变。
+        const BID_FIELDS = [
+          { key: 'bid_close', label: '紧密' },
+          { key: 'bid_loose', label: '宽泛' },
+          { key: 'bid_substitutes', label: '同类' },
+          { key: 'bid_complements', label: '关联' },
+        ];
+        const PLACE_FIELDS = [
+          { key: 'placement_top_pct', label: '顶部' },
+          { key: 'placement_rest_pct', label: '其余' },
+          { key: 'placement_product_pct', label: '商品页' },
+        ];
+        const OVERRIDE_KEYS = [...BID_FIELDS, ...PLACE_FIELDS].map(f => f.key);
+
+        const bidEditorOpen = ref('');   // 当前展开覆盖面板的父 SKU
+
+        const isBidOverridden = (item, key) => {
+          const v = item ? item[key] : null;
+          return v !== null && v !== undefined && v !== '';
+        };
+
+        const bidOverrideCount = (item) =>
+          item ? OVERRIDE_KEYS.filter(k => isBidOverridden(item, k)).length : 0;
+
+        // 生效值：有覆盖用覆盖值，否则用顶部统一值
+        const effectiveNum = (item, key) => {
+          const v = isBidOverridden(item, key) ? item[key] : settings.value[key];
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
+        };
+
+        const setBidOverride = (item, key, ev) => {
+          const raw = ev && ev.target ? ev.target.value : '';
+          item[key] = raw === '' ? null : Number(raw);
+        };
+
+        const clearBidOverrides = (item) => {
+          OVERRIDE_KEYS.forEach(k => { item[k] = null; });
+        };
+
+        const copyBidToSelected = (item) => {
+          const targets = selectedProducts.value;
+          targets.forEach(p => {
+            OVERRIDE_KEYS.forEach(k => {
+              p[k] = isBidOverridden(item, k) ? item[k] : null;
+            });
+          });
+          showToast(`已把该父体的竞价设置应用到 ${targets.length} 个已勾选父体`);
+        };
+
+        const toggleBidEditor = (item) => {
+          bidEditorOpen.value = bidEditorOpen.value === item.parent_sku ? '' : item.parent_sku;
+        };
+
+        const bidEditorTitle = (item) => {
+          const parts = [];
+          BID_FIELDS.forEach(f => parts.push(`${f.label} ${effectiveNum(item, f.key)}`));
+          PLACE_FIELDS.forEach(f => parts.push(`${f.label} ${effectiveNum(item, f.key)}%`));
+          return parts.join(' · ');
+        };
+
+        // 商品数据每次都是后端新下发的，这里补齐覆盖字段（缺省 null = 跟随顶部）
+        const ensureBidFields = (products) => {
+          (products || []).forEach(p => {
+            OVERRIDE_KEYS.forEach(k => { if (!(k in p)) p[k] = null; });
+          });
+        };
+
+        const selectedCount = computed(() => selectedProducts.value.length);
+
+        // 导出 / 接口直推共用：把「生效后」的竞价与溢价随商品一起提交，
+        // 后端若拿不到这些字段会回落到 settings，所以对旧调用保持兼容。
+        const toProductPayload = (p) => ({
+          parent_sku: p.parent_sku,
+          product_name: p.product_name,
+          assigned_budget: p.assigned_budget,
+          suggested_budget: p.suggested_budget,
+          bid_close: effectiveNum(p, 'bid_close'),
+          bid_loose: effectiveNum(p, 'bid_loose'),
+          bid_substitutes: effectiveNum(p, 'bid_substitutes'),
+          bid_complements: effectiveNum(p, 'bid_complements'),
+          placement_top_pct: effectiveNum(p, 'placement_top_pct'),
+          placement_rest_pct: effectiveNum(p, 'placement_rest_pct'),
+          placement_product_pct: effectiveNum(p, 'placement_product_pct'),
+          children: p.children
+        });
+
         const initShop = (shop) => {
           const d = allShopsData.value[shop];
           if (!d) return;
+          ensureBidFields(d.products);
           d.products.forEach(p => { p.selected = true; p.assigned_budget = Number(singleBudgetInput.value) || 100; });
           recalculateBudgets();
         };
@@ -1899,13 +2088,7 @@
           exporting.value = true;
           try {
             const payload = {
-              products: selected.map(p => ({
-                parent_sku: p.parent_sku,
-                product_name: p.product_name,
-                assigned_budget: p.assigned_budget,
-                suggested_budget: p.suggested_budget,
-                children: p.children
-              })),
+              products: selected.map(toProductPayload),
               settings: settings.value
             };
             const res = await fetch('/api/generate', {
@@ -1962,13 +2145,7 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 shop_id: autoShopId.value,
-                products: selected.map(p => ({
-                  parent_sku: p.parent_sku,
-                  product_name: p.product_name,
-                  assigned_budget: p.assigned_budget,
-                  suggested_budget: p.suggested_budget,
-                  children: p.children
-                })),
+                products: selected.map(toProductPayload),
                 settings: settings.value
               })
             });
@@ -3397,6 +3574,10 @@
           refreshingNames, refreshNameMatching, isNameManuallyEdited,
           fileName, loading, loadingText, exporting, dragging, error, headerRow, resolvedCols,
           handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel,
+          /* 单个父体竞价 / 溢价覆盖（v2.10） */
+          BID_FIELDS, PLACE_FIELDS, bidEditorOpen, isBidOverridden, bidOverrideCount,
+          setBidOverride, clearBidOverrides, copyBidToSelected, toggleBidEditor, bidEditorTitle,
+          selectedCount,
           autoCreating, autoCreateMsg, autoShopId, createAutoViaApi,
           adCoverage, adCoverageMeta, adOnlyUnoffered, adCoverageLoading,
           adCoverageError, adCoverageSummary, adStateOf, loadAdCoverage, refreshAdCoverage,
