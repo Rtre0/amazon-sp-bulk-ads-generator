@@ -3,16 +3,146 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>亚马逊 SP 广告批量生成工作台 · v2.0 双模块</title>
+  <title>亚马逊 SP 广告工作台</title>
   <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzI1NjNlYiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1zaXplPSIxNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iI2ZmZmZmZiIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIj5BPC90ZXh0Pjwvc3ZnPg==" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <style>
+    /* ===================================================================
+       视觉基调：参考 Apple 官网的克制风格
+       —— 中性灰白、细边框、大留白、单一蓝色强调色，不做花哨特效。
+       只覆盖观感，不改任何布局结构与功能。
+       =================================================================== */
+    :root {
+      --ap-bg: #f5f5f7;
+      --ap-text: #1d1d1f;
+      --ap-text-2: #424245;
+      --ap-muted: #6e6e73;
+      --ap-line: #e8e8ed;
+      --ap-line-2: #d2d2d7;
+      --ap-blue: #0071e3;
+      --ap-blue-h: #0077ed;
+      --ap-radius: 18px;
+    }
+
+    html { -webkit-text-size-adjust: 100%; }
+
+    body {
+      background: var(--ap-bg);
+      color: var(--ap-text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+                   "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      letter-spacing: -0.011em;
+      font-size: 14px;
+    }
+
+    h1, h2, h3 { letter-spacing: -0.022em; }
+    input, select, button, textarea { font-family: inherit; letter-spacing: inherit; }
+
+    /* —— 中性色统一到苹果灰阶 —— */
+    .bg-slate-50  { background-color: #fafafa !important; }
+    .bg-slate-100 { background-color: var(--ap-bg) !important; }
+    .bg-slate-700 { background-color: var(--ap-text) !important; }
+    .text-slate-900, .text-slate-800, .text-slate-700 { color: var(--ap-text) !important; }
+    .text-slate-600 { color: var(--ap-text-2) !important; }
+    .text-slate-500, .text-slate-400 { color: var(--ap-muted) !important; }
+    .border-slate-100, .border-slate-200 { border-color: var(--ap-line) !important; }
+    .border-slate-300 { border-color: var(--ap-line-2) !important; }
+    .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--ap-line) !important; }
+
+    /* —— 强调色 —— */
+    .bg-blue-600 { background-color: var(--ap-blue) !important; }
+    .hover\:bg-blue-700:hover { background-color: var(--ap-blue-h) !important; }
+    .text-blue-600, .text-blue-700, .text-blue-800 { color: var(--ap-blue) !important; }
+    .bg-blue-50 { background-color: #f2f7ff !important; }
+    .border-blue-300, .border-blue-400 { border-color: rgba(0, 113, 227, .45) !important; }
+
+    /* —— 圆角与投影 —— */
+    .rounded-xl { border-radius: var(--ap-radius) !important; }
+    .rounded-lg { border-radius: 12px !important; }
+    .rounded-md, .rounded { border-radius: 9px !important; }
+    .shadow-sm { box-shadow: 0 1px 2px rgba(0, 0, 0, .04) !important; }
+
+    /* 卡片：白底 + 极轻投影，去掉厚重描边感 */
+    header.bg-white, nav.bg-white, section.bg-white {
+      box-shadow: 0 1px 1px rgba(0, 0, 0, .03), 0 10px 30px -18px rgba(0, 0, 0, .18);
+      border-color: var(--ap-line) !important;
+    }
+
+    /* —— 顶部标题 —— */
+    header h1 { font-size: 21px; font-weight: 600; letter-spacing: -0.03em; }
+    header h1 > span:first-child { display: none; }   /* 去掉旧的蓝色小竖条 */
+
+    /* —— 按钮 —— */
+    button { transition: background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease; }
+    button:not(:disabled) { cursor: pointer; }
+    button:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(0, 113, 227, .22) !important; }
+
+    /* 顶部 Tab 用胶囊形，和苹果导航一致 */
+    nav button { border-radius: 980px !important; }
+
+    /* —— 表单 —— */
+    input:not([type=checkbox]):not([type=radio]), select {
+      border-radius: 10px !important;
+      background-color: #fff;
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+    input:not([type=checkbox]):not([type=radio]):focus, select:focus {
+      outline: none !important;
+      border-color: var(--ap-blue) !important;
+      box-shadow: 0 0 0 4px rgba(0, 113, 227, .16) !important;
+    }
+
+    /* 主按钮统一成同一个蓝，避免绿 / 靛 / 橙混用 */
+    .bg-emerald-600 { background-color: var(--ap-blue) !important; }
+    .hover\:bg-emerald-700:hover { background-color: var(--ap-blue-h) !important; }
+    .bg-indigo-600 { background-color: var(--ap-blue) !important; }
+    .hover\:bg-indigo-700:hover { background-color: var(--ap-blue-h) !important; }
+    .bg-amber-500 { background-color: var(--ap-blue) !important; }
+    .hover\:bg-amber-600:hover { background-color: var(--ap-blue-h) !important; }
+
+    /* 顶部工具链接：去掉下划线，hover 变蓝（更接近苹果的文字按钮） */
+    header .underline { text-decoration: none !important; }
+    header .underline:hover { color: var(--ap-blue) !important; }
+
+    /* 顶部词库条：更轻的底 */
+    header .bg-slate-100 {
+      background: #f5f5f7 !important;
+      border-color: var(--ap-line) !important;
+      border-radius: 12px !important;
+    }
+
+    /* 卡片标题 */
+    section h2 {
+      font-size: 15px !important;
+      font-weight: 600 !important;
+      letter-spacing: -0.015em;
+    }
+
+    /* —— 表格 —— */
+    thead th {
+      font-weight: 600 !important;
+      color: var(--ap-muted) !important;
+      background: #fbfbfd !important;
+      border-bottom: 1px solid var(--ap-line) !important;
+    }
+    tbody tr:hover { background: #fbfbfd; }
+    tbody td { border-bottom: 1px solid #f2f2f5; }
+
+    /* —— 滚动条 —— */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb {
+      background: #d6d6db; border-radius: 8px;
+      border: 2px solid transparent; background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #bcbcc2; background-clip: content-box; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
     [v-cloak] { display: none; }
     .fade-enter-active, .fade-leave-active { transition: opacity .2s ease; }
     .fade-enter-from, .fade-leave-to { opacity: 0; }
-    ::-webkit-scrollbar { height: 8px; width: 8px; }
-    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
   </style>
 </head>
 <body class="bg-slate-100 text-slate-800 min-h-screen antialiased">
@@ -25,9 +155,6 @@
           <span class="w-2.5 h-6 bg-blue-600 rounded-sm"></span>
           亚马逊 SP 广告批量生成工作台
         </h1>
-        <p class="text-xs text-slate-500 mt-1.5">
-          店铺隔离 · 纯离线名词库提取品名 · SKU 实时检索 · 等权 / 客单价加权预算池 · 本地库自动同步
-        </p>
       </div>
 
       <div class="flex items-end gap-3 flex-wrap">
@@ -145,7 +272,6 @@
                 class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg shadow-sm text-sm transition-colors">
           上传赛狐导出的 Excel 文件
         </button>
-        <p class="text-xs text-slate-400 mt-2.5">支持拖拽 · 自动多店铺分类 · 本地名词库提取日文品名（零联网） · 识别父子变体与真实售价</p>
         <p v-if="fileName" class="mt-2 text-xs text-blue-600 font-medium">已加载：{{ fileName }}</p>
         <p v-if="loading" class="mt-3 text-sm text-blue-600 animate-pulse">{{ loadingText }}</p>
         <p v-if="error" class="mt-3 text-sm text-red-600">{{ error }}</p>
@@ -183,7 +309,6 @@
                 <input type="number" min="0" max="900" v-model.number="settings.placement_top_pct" placeholder="Top 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 <input type="number" min="0" max="900" v-model.number="settings.placement_product_pct" placeholder="Prod 0" class="w-1/2 border border-slate-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
-              <p class="mt-1 text-[11px] leading-4 text-slate-400">填 0 = 不做加成，该广告位加成行不会生成（避免空操作行）。</p>
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (紧密/宽泛/同类/关联)</label>
@@ -492,9 +617,6 @@
       <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <h2 class="text-sm font-bold text-slate-800 mb-3.5 border-b border-slate-100 pb-2.5">
           投放目标与参数
-          <span class="text-[11px] font-normal text-slate-400 ml-2">
-            勾选搜索词 → {{ mtTargetMode === 'row' ? '按每行 ASIN 自动建广告' : '选定目标父体' }} → 导出 Bulk 或接口直推
-          </span>
         </h2>
 
         <!-- 投放商品来源：默认按行 ASIN 一对一，不需要选商品 -->
@@ -512,12 +634,6 @@
               手动选父 SKU
             </button>
           </div>
-          <span v-if="mtTargetMode === 'row'" class="text-[11px] text-emerald-700">
-            每个搜索词用该行「ASIN」列（出单商品）建 Product Ad，一词一活动，不用选商品
-          </span>
-          <span v-else class="text-[11px] text-slate-400">
-            沿用旧逻辑：所有勾选词都投到所选父体的全部子体
-          </span>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
@@ -529,16 +645,12 @@
                 {{ p.parent_sku }} · {{ p.product_name }}（{{ (p.children||[]).length }} 子体）
               </option>
             </select>
-            <div v-else class="h-[30px] flex items-center gap-1.5 px-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+            <div v-else class="h-[30px] flex items-center px-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
               <span class="text-[11px] font-semibold text-emerald-700">✓ 自动跟随每行 ASIN</span>
-              <span class="text-[11px] text-emerald-600">（{{ mtAutoTargetableCount }} 行可用）</span>
             </div>
           </div>
           <div class="md:col-span-2">
-            <label class="block text-xs font-semibold text-slate-600 mb-1">
-              匹配类型
-              <span class="font-normal text-slate-400">（可多选，每个类型生成一条关键词）</span>
-            </label>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">匹配类型</label>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 h-[30px]">
               <label v-for="mt in MATCH_TYPE_OPTIONS" :key="mt.value"
                      class="inline-flex items-center gap-1 text-xs text-slate-700 cursor-pointer whitespace-nowrap"
@@ -564,35 +676,76 @@
           </div>
         </div>
 
-        <!-- 竞价批量应用条 -->
-        <div class="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2.5">
-          <div class="text-xs font-semibold text-slate-700 pb-1.5 mr-1">⚡ 竞价批量应用</div>
-          <div>
-            <label class="block text-[11px] font-semibold text-slate-500 mb-1">出单价基准</label>
-            <select v-model="mtBidBase" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="cpc">原始 CPC（花费/点击）</option>
-              <option value="suggested">建议竞价</option>
-              <option value="fixed">固定金额</option>
-            </select>
+        <!-- 竞价批量应用条（v2.9：三种调价模式 + 实时试算） -->
+        <div class="mt-3.5 pt-3 border-t border-slate-100">
+          <div class="flex flex-wrap items-end gap-2.5">
+            <div class="text-xs font-semibold text-slate-700 pb-1.5 mr-1">⚡ 竞价批量应用</div>
+
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">出单价基准</label>
+              <select v-model="mtBidBase" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="cpc">原始 CPC（花费/点击）</option>
+                <option value="suggested">建议竞价</option>
+                <option value="fixed">固定金额</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">调价模式</label>
+              <select v-model="mtBidMode" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="affine">智能平滑（推荐）</option>
+                <option value="linear">线性倍数</option>
+                <option value="sqrt">平方根阻尼</option>
+              </select>
+            </div>
+
+            <!-- 智能平滑：比例 k + 固定增量 b -->
+            <template v-if="mtBidMode === 'affine'">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-500 mb-1">倍数 k</label>
+                <input type="number" step="0.01" v-model.number="mtBidFactor"
+                       class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-500 mb-1">固定增量 b</label>
+                <input type="number" step="1" v-model.number="mtBidOffset"
+                       class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </template>
+
+            <!-- 线性倍数：只有 k -->
+            <div v-else-if="mtBidMode === 'linear'">
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">倍数 k</label>
+              <input type="number" min="0" step="0.05" v-model.number="mtBidFactor"
+                     class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+
+            <!-- 平方根阻尼：强度 α -->
+            <div v-else>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">强度 α</label>
+              <input type="number" step="0.1" v-model.number="mtBidAlpha"
+                     class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-500 mb-1">封顶</label>
+              <input type="number" min="0" step="1" v-model.number="mtBidCap" placeholder="不限"
+                     class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+
+            <button @click="applyBidFactor" :disabled="!mtSelected.length"
+                    class="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors">
+              应用到勾选项
+            </button>
+            <button @click="applyFixedBid" :disabled="!mtSelected.length"
+                    class="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors">
+              统一填入 {{ mtBid }} JPY
+            </button>
           </div>
-          <div>
-            <label class="block text-[11px] font-semibold text-slate-500 mb-1">倍数</label>
-            <input type="number" min="0" step="0.1" v-model.number="mtBidFactor"
-                   class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
+
+          <div class="mt-2 text-[11px] text-slate-500 tabular-nums">
+            试算：{{ bidPreview }}
           </div>
-          <button @click="applyBidFactor" :disabled="!mtSelected.length"
-                  class="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors"
-                  :title="'把勾选行的竞价设为 基准 × ' + mtBidFactor">
-            × {{ mtBidFactor }} 应用到勾选项
-          </button>
-          <button @click="applyFixedBid" :disabled="!mtSelected.length"
-                  class="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
-                  :title="'把所有勾选行的竞价统一设为上方「关键词竞价」框里的金额 ' + mtBid + ' JPY'">
-            统一填入 {{ mtBid }} JPY
-          </button>
-          <span class="text-[11px] text-slate-400 pb-1.5">
-            基准为空/为 0 时回退到 {{ mtBid }} JPY；行数内「建议竞价」列仍可继续单独微调。
-          </span>
         </div>
 
         <!-- ASIN 商品投放：只在「投放产生 ASIN」维度出现 -->
@@ -609,11 +762,8 @@
                   title="对当前表格里所有行统一勾选 / 取消「投 ASIN」">
             {{ mtAllAsinTargeted ? '取消全部投 ASIN' : '全部投 ASIN' }}
           </button>
-          <span class="text-[11px] text-slate-400 pb-1.5">
-            ASIN 来自搜索词报表（该词成交的商品）。勾选「投 ASIN」后，Bulk 会生成
-            <span class="font-mono text-slate-600">asin="B0…"</span> 的 Product Targeting 行；
-            接口直推时会自动拆成单独的 <span class="font-mono text-slate-600">_ASIN</span> 活动。
-            当前勾选行将投放 <strong class="text-blue-600">{{ mtAsinTargetCount }}</strong> 个 ASIN。
+          <span v-if="mtAsinTargetCount" class="text-[11px] text-slate-400 pb-1.5">
+            已选 <strong class="text-blue-600">{{ mtAsinTargetCount }}</strong> 个 ASIN
           </span>
         </div>
       </section>
@@ -650,10 +800,7 @@
           <!-- 广告活动命名 -->
           <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2.5">
             <div class="min-w-[300px] flex-[2]">
-              <label class="block text-[11px] font-semibold text-slate-600 mb-1">
-                广告活动名称模板
-                <span class="font-normal text-slate-400">（来源活动自动去掉末尾时间戳；可用占位符 &#123;来源活动&#125; &#123;搜索词&#125; &#123;匹配类型&#125; &#123;ASIN&#125; &#123;父SKU&#125;）</span>
-              </label>
+              <label class="block text-[11px] font-semibold text-slate-600 mb-1">广告活动名称模板</label>
               <input v-model="mtNameTemplate" placeholder="{来源活动}_手动_{搜索词}_{匹配类型}"
                      class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
@@ -841,10 +988,6 @@
           </div>
         </h2>
 
-        <p class="text-[11px] text-slate-500 leading-5 mb-3">
-          一个赛狐账号只能看到<strong class="text-slate-700">自己权限内</strong>的店铺。有多个账号时，把每个账号分别加进来，
-          点下面的「全量同步」就会<strong class="text-slate-700">逐个账号各拉一遍</strong>，登录态互不覆盖，也不会再串号。
-        </p>
 
         <!-- 账号密码登录（半自动：图形验证码人工输入） -->
         <div v-if="showLoginPanel" class="mb-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg">
@@ -1026,9 +1169,6 @@
                     class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
               {{ rangeSync.running ? '补同步中…' : '补同步该区间（关键词 + ASIN）' }}
             </button>
-            <span class="text-[11px] text-slate-400 pb-1.5">
-              逐日 × 逐店 × 双维度；单次最多 90 天，已存在的日期会覆盖更新
-            </span>
           </div>
           <div v-if="rangeSync.running" class="mt-2.5 p-2.5 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800 leading-5">
             正在补 {{ rangeSync.start_date }} ~ {{ rangeSync.end_date }} … 开始于 {{ (rangeSync.started_at || '').replace('T', ' ') }}。可以切到别的页面，后台会继续跑。
@@ -1081,11 +1221,6 @@
           <!-- 可选：调试模式自动抓取，默认收起 -->
           <div>
             <label class="block text-xs font-semibold text-slate-600 mb-1.5">方式二：Chrome 调试模式自动抓取（可选）</label>
-            <p class="text-[11px] text-slate-400 leading-5 mb-2.5">
-              不想手动复制时才用：需先双击项目根目录的
-              <span class="font-mono bg-slate-100 px-1 rounded">启动Chrome调试模式.bat</span>，
-              在弹出的 Chrome 里登录赛狐。
-            </p>
             <details class="group">
               <summary class="inline-block px-3.5 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-600 cursor-pointer hover:bg-slate-50 select-none">
                 ▸ 展开自动抓取（需要 9222 调试端口）
@@ -1190,7 +1325,6 @@
           <span class="text-xs font-semibold text-slate-600">搜索词回补天数</span>
           <input type="number" min="1" max="30" v-model.number="syncDays"
                  class="w-20 border border-slate-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          <span class="text-[11px] text-slate-400">1 = 仅昨天（T-1）；最多 30 天。逐日、逐店铺同步，同时抓「用户搜索词」和「投放产生 ASIN」两个维度；天数越多耗时越长。</span>
           <button @click="syncSearchTerms('')" :disabled="!!syncingShop"
                   class="ml-auto px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors">
             {{ syncingShop === ':s' ? '同步中…' : `⬇ 同步全部店铺最近 ${syncDays} 天` }}
@@ -1279,7 +1413,6 @@
                   class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
             💾 保存同步计划（立即生效）
           </button>
-          <span class="text-[11px] text-slate-400">保存后自动重新装载任务，无需重启服务。</span>
           <span v-if="schedMsg" class="text-xs text-emerald-600 font-medium">{{ schedMsg }}</span>
         </div>
       </section>
@@ -2547,9 +2680,14 @@
         const mtAsinBid = ref(25);          // 手动 ASIN 商品投放竞价
         const mtExporting = ref(false);
         const mtCreating = ref(false);
-        // 竞价批量应用
+        // 竞价批量应用（v2.9：三种调价模式，默认智能平滑）
         const mtBidBase = ref('cpc');       // cpc | suggested | fixed
-        const mtBidFactor = ref(1.4);
+        const mtBidMode = ref('affine');    // linear 线性 | affine 智能平滑 | sqrt 平方根阻尼
+        const mtBidFactor = ref(1.05);      // k：比例系数
+        const mtBidOffset = ref(2);         // b：固定增量
+        const mtBidAlpha = ref(0.7);        // α：平方根敏感度
+        const mtBidCap = ref(0);            // 封顶，0 = 不限
+        const mtBidMinStep = ref(true);     // 结果没变化时至少 ±1
         // 广告活动命名：模板统一生成 + 逐条手改覆盖
         const DEFAULT_NAME_TPL = '{来源活动}_手动_{搜索词}_{匹配类型}';
         const mtNameTemplate = ref(DEFAULT_NAME_TPL);
@@ -2821,7 +2959,47 @@
           showToast('已恢复「来源活动_手动_搜索词_匹配类型」并清空手改');
         };
 
-        /* ---- 竞价批量应用 ---- */
+        /* ---- 竞价批量应用（v2.9 非线性平滑调价） ----
+         * 痛点：日元站竞价是整数，15 × 1.1 = 16.5 → 16 只涨 1（涨不动）；
+         *       70 × 1.1 = 77 一次涨 7（成本失控）。
+         * 三种模式：
+         *   linear  线性：base × k                     （兼容老习惯）
+         *   affine  智能平滑：base × k + b             （推荐，低价多涨、高价少涨）
+         *   sqrt    平方根阻尼：base + α × √base       （单参数，边际递减）
+         */
+        const BID_MIN = 2;   // 平台最低出价保护
+
+        const calculateNewBid = (baseBid, opts = {}) => {
+          const base = Number(baseBid) || 0;
+          if (base <= 0) return 0;
+          const mode = opts.mode || mtBidMode.value;
+          const k = opts.multiplier !== undefined ? Number(opts.multiplier) : Number(mtBidFactor.value);
+          const b = opts.offset !== undefined ? Number(opts.offset) : Number(mtBidOffset.value);
+          const alpha = opts.alpha !== undefined ? Number(opts.alpha) : Number(mtBidAlpha.value);
+
+          let raw = base;
+          if (mode === 'linear') raw = base * k;
+          else if (mode === 'sqrt') raw = base + alpha * Math.sqrt(base);
+          else raw = base * k + b;
+
+          let out = Math.round(raw);
+          const baseInt = Math.round(base);
+          // 微调时四舍五入可能等于原价，按「至少变化 ±1」兜底，避免点了没反应
+          if (out === baseInt && mtBidMinStep.value) {
+            out = baseInt + (raw >= base ? 1 : -1);
+          }
+          out = Math.max(BID_MIN, out);
+          const cap = Number(mtBidCap.value) || 0;
+          if (cap > 0) out = Math.min(cap, out);
+          return out;
+        };
+
+        const bidPreview = computed(() => {
+          const a = calculateNewBid(15);
+          const b = calculateNewBid(70);
+          return `原价 15 → ${a} JPY　·　原价 70 → ${b} JPY`;
+        });
+
         const bidBaseOf = (r) => {
           if (mtBidBase.value === 'suggested') return Number(r.suggested_bid) || 0;
           if (mtBidBase.value === 'fixed') return Number(mtBid.value) || 0;
@@ -2829,17 +3007,25 @@
         };
 
         const applyBidFactor = () => {
-          const f = Number(mtBidFactor.value);
-          if (!f || f <= 0) { showToast('倍数必须大于 0'); return; }
+          if (mtBidMode.value !== 'sqrt' && !(Number(mtBidFactor.value) > 0)) {
+            showToast('倍数必须大于 0'); return;
+          }
           const rows = mtSelected.value;
           if (!rows.length) { showToast('请先勾选搜索词'); return; }
           let fallback = 0;
           rows.forEach(r => {
             const base = bidBaseOf(r);
-            if (base <= 0) fallback++;
-            r.bid = Math.round((base > 0 ? base * f : (Number(mtBid.value) || 15)) * 100) / 100;
+            if (base <= 0) {
+              fallback++;
+              r.bid = Number(mtBid.value) || 15;
+              return;
+            }
+            r.bid = calculateNewBid(base);
           });
-          showToast(`已按 ×${f} 应用到 ${rows.length} 个关键词` +
+          const label = mtBidMode.value === 'linear' ? `×${mtBidFactor.value}`
+            : mtBidMode.value === 'sqrt' ? `平方根 α=${mtBidAlpha.value}`
+            : `智能平滑 k=${mtBidFactor.value} b=${mtBidOffset.value}`;
+          showToast(`已按${label}应用到 ${rows.length} 个关键词` +
                     (fallback ? `（${fallback} 条无基准，回退 ${mtBid.value} JPY）` : ''));
         };
 
@@ -3242,7 +3428,8 @@
           mtShopId, mtStartDate, mtEndDate, mtKeyword, mtOnlyOrders, mtRows, mtTotal,
           mtLoading, mtSyncing, mtProducts, mtTargetSku, mtBid, mtDefaultBid,
           mtDailyBudget, mtExporting, mtCreating, mtSelected, mtAllSelected,
-          mtBidBase, mtBidFactor, applyBidFactor, applyFixedBid,
+          mtBidBase, mtBidMode, mtBidFactor, mtBidOffset, mtBidAlpha, mtBidCap, bidPreview,
+          applyBidFactor, applyFixedBid,
           MATCH_TYPE_OPTIONS, mtMatchTypes, toggleMatchType, mtMatchSummary,
           mtAsinBid, mtAsinTargetCount, mtAllAsinTargeted, toggleAllAsinTargets,
           mtTargetMode, mtTargetReady, mtAutoTargetableCount, mskuOf,
