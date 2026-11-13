@@ -62,7 +62,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 版本号唯一来源：FastAPI 元数据与 /api/health 都读它，避免两处硬编码漂移。
 # 发布新版本时请同步更新 CHANGELOG.md 与 docs/RELEASE_NOTES_*.md。
-__version__ = "2.9.0"
+__version__ = "2.10.0"
 
 app = FastAPI(
     title="Amazon SP Bulk Ads Generator",
@@ -308,21 +308,33 @@ def create_auto_via_api(req: AutoAdCreateRequest):
     include_targeting = bool(settings.get("include_targeting", True))
     include_placement = bool(settings.get("include_placement", True))
 
-    def _pct(key: str) -> Optional[str]:
+    def _raw(key: str, item: Optional[Dict[str, Any]] = None) -> Any:
+        """取配置值：父体级覆盖优先，未填（None / 空串）则回落顶部统一设置。
+
+        v2.10：4 组竞价与广告位溢价支持逐个父体单独设置，前端留空即「跟随顶部」。
+        """
+        if item:
+            val = item.get(key)
+            if val is not None and val != "":
+                return val
+        return settings.get(key)
+
+    def _pct(key: str, item: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """广告位溢价：0 视为不做加成（与 Bulk 一致，不提交该字段）。"""
         if not include_placement:
             return None
         try:
-            val = int(float(settings.get(key) or 0))
+            val = int(float(_raw(key, item) or 0))
         except (TypeError, ValueError):
             return None
         return str(val) if val > 0 else None
 
     # include_targeting=False 时，4 组竞价留空 → 继承广告组默认竞价
-    def _bid(key: str, fallback: Any) -> str:
+    def _bid(key: str, fallback: Any, item: Optional[Dict[str, Any]] = None) -> str:
         if not include_targeting:
             return ""
-        return str(settings.get(key, fallback))
+        val = _raw(key, item)
+        return str(fallback if val is None or val == "" else val)
 
     today_str = datetime.datetime.now().strftime("%Y%m%d")
     results: List[Dict[str, Any]] = []
@@ -361,13 +373,14 @@ def create_auto_via_api(req: AutoAdCreateRequest):
                 portfolio_id=portfolio_id,
                 strategy=strategy,
                 default_bid=str(default_bid),
-                bid_close=_bid("bid_close", 25),
-                bid_loose=_bid("bid_loose", 20),
-                bid_sub=_bid("bid_substitutes", 25),
-                bid_comp=_bid("bid_complements", 20),
+                bid_close=_bid("bid_close", 25, item),
+                bid_loose=_bid("bid_loose", 20, item),
+                bid_sub=_bid("bid_substitutes", 25, item),
+                bid_comp=_bid("bid_complements", 20, item),
                 products=products,
-                placement_top=_pct("placement_top_pct"),
-                placement_product_page=_pct("placement_product_pct"),
+                placement_top=_pct("placement_top_pct", item),
+                placement_rest_of_search=_pct("placement_rest_pct", item),
+                placement_product_page=_pct("placement_product_pct", item),
             )
             resp = sf.create_sp_ad(payload)
             check = sf.check_create_result(resp)

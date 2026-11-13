@@ -191,6 +191,21 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _pick_num(item: Dict[str, Any], key: str, default: float) -> float:
+    """取「父体级覆盖值」，缺失 / 空串 / 非法值一律回落到顶部统一设置。
+
+    v2.10：4 组竞价与广告位溢价支持逐个父体单独设置。前端留空即表示
+    「跟随顶部」，因此这里必须把 ``None`` 和 ``""`` 都当成「未设置」，
+    不能直接交给 ``float()``（``float("")`` 会抛异常、``float(None)`` 也是）。
+    """
+    if not isinstance(item, dict):
+        return default
+    raw = item.get(key)
+    if raw is None or raw == "":
+        return default
+    return _to_float(raw, default)
+
+
 # ---------------------------------------------------------------------------
 # 临时 ID（v10 关键）
 #   亚马逊 Bulksheet 2.0：``Create`` 操作的实体编号必须是「临时 ID」，
@@ -249,18 +264,13 @@ def generate_bulk_excel(
     bidding_strategy = settings.get("bidding_strategy", "Fixed bid")
     default_bid = _to_float(settings.get("default_bid", 25.0), 25.0)
     top_adj = _to_float(settings.get("placement_top_pct", 0.0))
+    rest_adj = _to_float(settings.get("placement_rest_pct", 0.0))
     prod_adj = _to_float(settings.get("placement_product_pct", 0.0))
 
     bid_close = _to_float(settings.get("bid_close", 25.0), 25.0)
     bid_loose = _to_float(settings.get("bid_loose", 20.0), 20.0)
     bid_sub = _to_float(settings.get("bid_substitutes", 25.0), 25.0)
     bid_comp = _to_float(settings.get("bid_complements", 20.0), 20.0)
-    targeting_bids = {
-        "close-match": bid_close,
-        "loose-match": bid_loose,
-        "substitutes": bid_sub,
-        "complements": bid_comp,
-    }
     # 是否显式生成 4 组自动匹配 Product Targeting 行（关闭则所有匹配类型继承
     # 广告组默认竞价，与不带 Targeting 行的历史 V3 文件保持一致）
     include_targeting = bool(settings.get("include_targeting", True))
@@ -314,13 +324,21 @@ def generate_bulk_excel(
             }
         )
 
-        # 2 & 3. Bidding Adjustment - 搜索顶部 / 商品页面
+        # 2 & 3. Bidding Adjustment - 搜索顶部 / 其余搜索页 / 商品页面
         #    百分比为 0 等于「不做加成」，是一行空操作，只会平白增加被亚马逊
         #    校验的行数；因此 0 直接跳过，需要加成时填非 0 即可。
+        #    v2.10：三个广告位都可被该父体单独覆盖，未填则跟随顶部统一值。
         if include_placement:
             for placement, pct in (
-                (PLACEMENT_TOP, top_adj),
-                (PLACEMENT_PRODUCT_PAGE, prod_adj),
+                (PLACEMENT_TOP, _pick_num(item, "placement_top_pct", top_adj)),
+                (
+                    PLACEMENT_REST_OF_SEARCH,
+                    _pick_num(item, "placement_rest_pct", rest_adj),
+                ),
+                (
+                    PLACEMENT_PRODUCT_PAGE,
+                    _pick_num(item, "placement_product_pct", prod_adj),
+                ),
             ):
                 if pct <= 0:
                     continue
@@ -372,6 +390,13 @@ def generate_bulk_excel(
         #       受控裸值 close-match/loose-match/substitutes/complements；
         #    3) ``关键词文本`` 与 ``匹配类型`` 必须留空（这是投放组，不是关键词）。
         if include_targeting:
+            # v2.10：每个父体可单独覆盖 4 组竞价，未填则跟随顶部统一值
+            item_bids = {
+                "close-match": _pick_num(item, "bid_close", bid_close),
+                "loose-match": _pick_num(item, "bid_loose", bid_loose),
+                "substitutes": _pick_num(item, "bid_substitutes", bid_sub),
+                "complements": _pick_num(item, "bid_complements", bid_comp),
+            }
             for pred in AUTO_TARGETING:
                 rows.append(
                     {
@@ -381,7 +406,7 @@ def generate_bulk_excel(
                         "广告活动编号": campaign_id,
                         "广告组编号": ad_group_id,
                         "状态": "enabled",
-                        "竞价": targeting_bids[pred],
+                        "竞价": item_bids[pred],
                         TARGETING_EXPR_COLUMN: pred,
                     }
                 )
