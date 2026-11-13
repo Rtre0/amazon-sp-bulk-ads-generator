@@ -66,13 +66,6 @@
           </button>
         </div>
 
-        <div v-if="shopList.length">
-          <label class="block text-xs font-semibold text-slate-600 mb-1">当前店铺</label>
-          <select v-model="selectedShop" @change="onShopChange"
-                  class="border border-blue-400 bg-blue-50 text-blue-900 font-medium rounded-lg px-3 py-1.5 text-sm outline-none shadow-sm min-w-[180px]">
-            <option v-for="shop in shopList" :key="shop" :value="shop">{{ shop }}</option>
-          </select>
-        </div>
       </div>
     </header>
 
@@ -104,11 +97,19 @@
       <section class="mb-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
         <span class="text-xs font-bold text-slate-700 whitespace-nowrap">商品数据源</span>
 
+        <!-- Excel 导入多店铺时的切换（顶部全局店铺下拉已移除，切换只留在这里） -->
+        <select v-if="dataSource === 'excel' && shopList.length > 1"
+                v-model="selectedShop" @change="onShopChange"
+                class="border border-blue-300 bg-blue-50 text-blue-800 font-medium rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-blue-400 min-w-[180px]"
+                title="Excel 里有多个店铺时在这里切换">
+          <option v-for="shop in sortedShopList" :key="shop" :value="shop">{{ displayNameOfShop(shop) }}</option>
+        </select>
+
         <select v-model="selectedDbShopId"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white min-w-[220px] focus:outline-none focus:ring-2 focus:ring-blue-500">
           <option value="">— 选择本地库店铺 —</option>
-          <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">
-            {{ s.shop_name || s.shop_id }}（{{ s.shop_id }}）
+          <option v-for="s in sortedDbShops" :key="s.shop_id" :value="s.shop_id">
+            {{ displayNameOfDbShop(s) }}（{{ s.shop_id }}）
           </option>
         </select>
 
@@ -455,8 +456,8 @@
             <label class="block text-xs font-semibold text-slate-600 mb-1">店铺</label>
             <select v-model="mtShopId" class="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">全部店铺</option>
-              <option v-for="s in dbShops" :key="s.shop_id" :value="s.shop_id">
-                {{ s.shop_name || s.shop_id }}{{ accounts.length > 1 ? ' · ' + accountLabelOfShop(s) : '' }}
+              <option v-for="s in sortedDbShops" :key="s.shop_id" :value="s.shop_id">
+                {{ displayNameOfDbShop(s) }}{{ accounts.length > 1 ? ' · ' + accountLabelOfShop(s) : '' }}
               </option>
             </select>
           </div>
@@ -1142,12 +1143,25 @@
         </h2>
 
         <div v-if="dbShops.length" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          <div v-for="s in dbShops" :key="s.shop_id"
+          <div v-for="s in sortedDbShops" :key="s.shop_id"
                class="border border-slate-200 rounded-lg p-3.5 bg-slate-50 hover:bg-white hover:shadow-sm transition-all">
-            <div class="flex items-center justify-between mb-1">
-              <span class="text-sm font-bold text-slate-800">{{ s.shop_name || s.shop_id }}</span>
-              <span class="text-[10px] font-mono text-slate-400">{{ s.shop_id }}</span>
+            <div class="flex items-center justify-between mb-1 gap-2">
+              <template v-if="aliasEditing === s.shop_id">
+                <input v-model="aliasDraft" data-alias-input maxlength="24"
+                       @keyup.enter="saveAlias(s.shop_id)" @keyup.esc="cancelEditAlias"
+                       @blur="saveAlias(s.shop_id)"
+                       placeholder="例如：01-主店"
+                       class="flex-1 min-w-0 border border-blue-400 rounded px-1.5 py-0.5 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+              </template>
+              <template v-else>
+                <span class="text-sm font-bold text-slate-800 truncate" :title="s.shop_name">{{ displayNameOfDbShop(s) }}</span>
+                <button @click="startEditAlias(s)"
+                        class="text-[11px] text-blue-600 hover:text-blue-800 whitespace-nowrap shrink-0"
+                        title="给店铺起个名字，所有下拉框会按这个名字排序">✎ 命名</button>
+              </template>
+              <span class="text-[10px] font-mono text-slate-400 shrink-0">{{ s.shop_id }}</span>
             </div>
+            <div v-if="s.alias" class="text-[10px] text-slate-400 mb-1 truncate" :title="s.shop_name">原名：{{ s.shop_name }}</div>
             <div class="text-[10px] text-slate-400 mb-2 truncate"
                  :title="'所属赛狐账号：' + accountLabelOfShop(s)">
               🔑 {{ accountLabelOfShop(s) }}
@@ -1337,7 +1351,7 @@
   </div>
 
   <script>
-    const { createApp, ref, computed } = Vue;
+    const { createApp, ref, computed, nextTick } = Vue;
 
     const DEFAULT_SETTINGS = () => ({
       bidding_strategy: 'Fixed bid',
@@ -1685,6 +1699,58 @@
               selectedDbShopId.value = dbShops.value[0].shop_id;
             }
           } catch (e) { /* 静默 */ }
+        };
+
+        /* ============ v2.8 店铺命名：下拉框按自定义名排序 ============ */
+        // 名字只用于本地显示与排序，不改赛狐真实店铺名，也不影响同步 / 投放（内部一律用 shop_id）。
+        const aliasEditing = ref('');   // 正在命名的 shop_id
+        const aliasDraft = ref('');
+
+        const displayNameOfDbShop = (s) => (s && (s.alias || s.shop_name)) || (s && s.shop_id) || '';
+
+        // Excel 导入的店铺只有名字没有 shop_id，按 shop_name 反查本地库的别名
+        const displayNameOfShop = (name) => {
+          const s = dbShops.value.find(x => x.shop_name === name);
+          return (s && s.alias) || name;
+        };
+
+        const sortedDbShops = computed(() => [...dbShops.value].sort((a, b) =>
+          displayNameOfDbShop(a).localeCompare(displayNameOfDbShop(b), 'zh-CN')));
+
+        const sortedShopList = computed(() => [...shopList.value].sort((a, b) =>
+          displayNameOfShop(a).localeCompare(displayNameOfShop(b), 'zh-CN')));
+
+        const startEditAlias = (s) => {
+          aliasEditing.value = s.shop_id;
+          aliasDraft.value = s.alias || '';
+          nextTick(() => {
+            const el = document.querySelector('[data-alias-input]');
+            if (el) { el.focus(); el.select(); }
+          });
+        };
+
+        const cancelEditAlias = () => { aliasEditing.value = ''; aliasDraft.value = ''; };
+
+        const saveAlias = async (shopId) => {
+          if (aliasEditing.value !== shopId) return;   // 回车与失焦会各触发一次，只认第一次
+          const val = (aliasDraft.value || '').trim();
+          aliasEditing.value = '';
+          try {
+            const res = await fetch(`/api/shops/${encodeURIComponent(shopId)}/alias`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ alias: val })
+            });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              throw new Error(d.detail || '保存失败');
+            }
+            await loadDbShops();
+            showToast(val ? `已命名为「${val}」` : '已恢复赛狐原名');
+          } catch (e) {
+            showToast('命名失败：' + (e.message || '网络异常'));
+            await loadDbShops();
+          }
         };
 
         const loadShopIntoAuto = async (sid) => {
@@ -3150,6 +3216,9 @@
           adCoverageError, adCoverageSummary, adStateOf, loadAdCoverage, refreshAdCoverage,
           /* 数据源 */
           dataSource, showExcel, dbShops, selectedDbShopId, loadingDb, onDbShopChange, loadShopIntoAuto,
+          /* 店铺命名与排序 */
+          sortedDbShops, sortedShopList, displayNameOfDbShop, displayNameOfShop,
+          aliasEditing, aliasDraft, startEditAlias, cancelEditAlias, saveAlias,
           /* 词库 */
           dictOpen, dictSearch, dictEntries, dictStats, dictInput, newEntry, filteredDict,
           openDict, reloadDict, importDict, refreshDictCount, addDictEntry, saveDictEntry, deleteDictEntry,
@@ -3184,6 +3253,7 @@
           mtDimension, onDimensionChange, asinOf,
           shopAccess, checkingAccess, cookieMismatch, checkShopAccess,
           toggleSelectAllTerms, loadSearchTerms, exportManualBulk, createManualViaApi,
+          queryAndSync, mtSyncMsg,
           /* 定时任务 */
           schedStatus, schedBusy, schedMsg, loadSchedStatus, toggleScheduler, saveSchedConfig, runJobNow
         };

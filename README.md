@@ -3,14 +3,15 @@
 > 亚马逊 SP 广告投放工作台：**赛狐 ERP 数据进来 → 商品与搜索词分析 → 自动广告、手动广告批量开出来**。
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-v2.7.0-2f81f7">
+  <img alt="version" src="https://img.shields.io/badge/version-v2.8.0-2f81f7">
   <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">
   <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-291%20assertions-success">
 </p>
 
-> **当前版本 v2.7.0 · 2026-11-12**
-> 本次把 GitHub 上停留在 **v10.0.0（2026-10-30）** 的仓库一次性补齐到最新。
+> **当前版本 v2.8.0 · 2026-11-13**
+> v2.7.0 起把 GitHub 上停留在 **v10.0.0（2026-10-30）** 的仓库补齐到最新；
+> v2.8.0 增加店铺命名与按名字排序，并修掉「查询并同步」按钮无响应的问题。
 
 ## 文档
 
@@ -57,6 +58,7 @@
 | 商品图正常显示 | 商品缩略图由后端代理并缓存，不再是一片白块 |
 | 活动名自动清洗 | 来源活动名只留「SKU + 产品名」，自动去掉日期、时间、复制后缀等噪音 |
 | 数据与账号安全 | 数据库和 Cookie 可一键搬到项目外，仓库里不留任何真实店铺信息 |
+| 店铺命名与排序 | 给店铺起好认的名字，所有店铺下拉框按这个名字排序，不再是一串乱序的 `xxx-JP` |
 
 > 离线链路依然完全零网络依赖；在线同步与直接开广告是可选项，没配登录态也能正常用离线功能。
 

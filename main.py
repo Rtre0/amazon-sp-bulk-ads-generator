@@ -62,7 +62,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 版本号唯一来源：FastAPI 元数据与 /api/health 都读它，避免两处硬编码漂移。
 # 发布新版本时请同步更新 CHANGELOG.md 与 docs/RELEASE_NOTES_*.md。
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 app = FastAPI(
     title="Amazon SP Bulk Ads Generator",
@@ -155,6 +155,11 @@ class ShopRegisterRequest(BaseModel):
     shop_id: str
     shop_name: str = ""
     marketplace: str = "A1VC38T7YXB528"
+
+
+class ShopAliasRequest(BaseModel):
+    """店铺自定义名请求（v2.8）。传空串恢复赛狐原名。"""
+    alias: str = ""
 
 
 class SyncTriggerRequest(BaseModel):
@@ -408,6 +413,20 @@ def register_shop(req: ShopRegisterRequest):
     """注册/更新一个店铺。"""
     db.upsert_shop(req.shop_id, req.shop_name, req.marketplace)
     return {"ok": True, "shop": db.get_shop(req.shop_id)}
+
+
+@app.post("/api/shops/{shop_id}/alias")
+def rename_shop(shop_id: str, req: ShopAliasRequest):
+    """给店铺起名 / 改名（v2.8）。
+
+    名字只影响本地显示与下拉排序，不改赛狐那边的真实店铺名，
+    也不影响同步与投放（内部一律用 shop_id）。
+    """
+    shop = db.get_shop(shop_id)
+    if not shop:
+        raise HTTPException(404, f"店铺不存在：{shop_id}")
+    db.set_shop_alias(shop_id, req.alias)
+    return {"ok": True, "shop": db.get_shop(shop_id)}
 
 
 @app.post("/api/shops/discover")

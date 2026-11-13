@@ -165,6 +165,9 @@ def init_db() -> None:
     )
     # v2.4：多赛狐账号。店铺归属于哪个账号，用于前端分组和同步范围校验。
     _ensure_column(conn, "shops", "account_id", "TEXT NOT NULL DEFAULT ''")
+    # v2.8：店铺自定义名。赛狐原名往往带 -JP 后缀且顺序杂乱，
+    # 允许人工起名，所有下拉框按这个名字排序显示。
+    _ensure_column(conn, "shops", "alias", "TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 
@@ -219,16 +222,32 @@ def update_shop_sync_time(shop_id: str, sync_type: str = "product") -> None:
 
 
 def list_shops(account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """返回已注册的店铺；给了 ``account_id`` 只返回该账号名下的。"""
+    """返回已注册的店铺；给了 ``account_id`` 只返回该账号名下的。
+
+    排序：优先按人工起的名字（``alias``），没起名的按赛狐原名。
+    SQLite 对中文按 UTF-8 字节排序，前端还会用 localeCompare 再排一次，
+    这里只保证「同一批数据每次返回顺序稳定」。
+    """
     conn = get_conn()
+    order = "ORDER BY COALESCE(NULLIF(alias, ''), shop_name), shop_id"
     if account_id:
         rows = conn.execute(
-            "SELECT * FROM shops WHERE account_id = ? ORDER BY shop_id",
+            f"SELECT * FROM shops WHERE account_id = ? {order}",
             (account_id,),
         ).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM shops ORDER BY shop_id").fetchall()
+        rows = conn.execute(f"SELECT * FROM shops {order}").fetchall()
     return [dict(r) for r in rows]
+
+
+def set_shop_alias(shop_id: str, alias: str) -> None:
+    """给店铺设置自定义名；传空串表示恢复赛狐原名。"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE shops SET alias = ? WHERE shop_id = ?",
+        ((alias or "").strip(), shop_id),
+    )
+    conn.commit()
 
 
 def get_shop(shop_id: str) -> Optional[Dict[str, Any]]:
