@@ -410,14 +410,6 @@
                      class="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
               <span class="absolute left-2.5 top-1.5 text-slate-400 text-xs">🔍</span>
             </div>
-            <div class="flex items-center gap-1.5">
-              <span class="text-xs text-slate-500">排序</span>
-              <select v-model="sortMode" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="sku_asc">父 SKU 升序 (A→Z)</option>
-                <option value="sku_desc">父 SKU 降序 (Z→A)</option>
-                <option value="price_desc">客单价 高→低</option>
-              </select>
-            </div>
             <div class="text-xs text-slate-500">
               中位数客单价：<strong class="text-slate-800">¥{{ fmt(currentShopData.median_price) }}</strong> ·
               当前展示：<strong>{{ filteredProducts.length }}</strong> / {{ currentShopData.products.length }} 个 ·
@@ -426,6 +418,7 @@
                 广告：<strong class="text-emerald-600">已开 {{ adCoverageSummary.enabled }}</strong>
                 / <strong class="text-slate-500">未开 {{ adCoverageSummary.none + adCoverageSummary.paused }}</strong>
                 <span v-if="adCoverageSummary.paused" class="text-slate-400">（其中已暂停 {{ adCoverageSummary.paused }}）</span>
+                <span class="text-slate-400"> · 自动 {{ adCoverageSummary.auto_enabled || 0 }} / 手动 {{ adCoverageSummary.manual_enabled || 0 }}</span>
               </span>
               <span v-else-if="adCoverageError" class="ml-2 text-rose-500" :title="adCoverageError">
                 · 广告状态读取失败
@@ -469,27 +462,45 @@
                     <input type="checkbox" :checked="isAllFilteredSelected" @change="toggleSelectFiltered" class="accent-blue-600 w-4 h-4" />
                   </th>
                   <th class="p-3 w-14 text-center">图片</th>
-                  <th class="p-3 cursor-pointer select-none hover:text-blue-600 whitespace-nowrap" @click="toggleSkuSort"
-                      :title="'点击切换父 SKU 排序（当前：' + sortLabel + '）'">
-                    父 SKU
-                    <span class="ml-1 text-xs font-bold text-blue-600">{{ skuSortIcon }}</span>
+                  <th class="p-3 cursor-pointer select-none whitespace-nowrap hover:text-blue-600"
+                      @click="toggleSort('parent_sku')" title="点击按父 SKU 排序（A→Z / Z→A）">
+                    父 SKU <span class="ml-1 text-[10px]" :class="sortArrowClass('parent_sku')">{{ sortIcon('parent_sku') }}</span>
                   </th>
-                  <th class="p-3 text-center whitespace-nowrap" title="该父 SKU 在赛狐里是否已有「已开启」的广告活动（暂停/归档不算）">
-                    广告状态
-                    <button @click="refreshAdCoverage" :disabled="adCoverageLoading"
+                  <th class="p-3 text-center whitespace-nowrap cursor-pointer select-none hover:text-blue-600"
+                      @click="toggleSort('ad_state')"
+                      title="点击按广告状态排序（已开启 → 已暂停 → 未开启）">
+                    广告状态 <span class="ml-1 text-[10px]" :class="sortArrowClass('ad_state')">{{ sortIcon('ad_state') }}</span>
+                    <button @click.stop="refreshAdCoverage" :disabled="adCoverageLoading"
                             class="ml-1 align-middle text-[10px] text-blue-600 hover:text-blue-800 disabled:opacity-40"
                             :title="adCoverageLoading ? '正在读取赛狐广告数据…' : '重新读取赛狐广告数据'">↻</button>
-                    <div class="mt-1 flex justify-center">
+                    <div class="mt-1 flex justify-center" @click.stop>
                       <label class="inline-flex items-center gap-1 text-[10px] font-normal text-slate-500 cursor-pointer">
                         <input type="checkbox" v-model="adOnlyUnoffered" class="accent-blue-600 w-3 h-3" />
                         只看未开
                       </label>
                     </div>
                   </th>
+                  <th class="p-3 text-center whitespace-nowrap cursor-pointer select-none hover:text-blue-600"
+                      @click="toggleSort('auto_count')" title="该父体当前已开启的自动广告活动数（暂停 / 归档不算）">
+                    自动广告 <span class="ml-1 text-[10px]" :class="sortArrowClass('auto_count')">{{ sortIcon('auto_count') }}</span>
+                  </th>
+                  <th class="p-3 text-center whitespace-nowrap cursor-pointer select-none hover:text-blue-600"
+                      @click="toggleSort('manual_count')" title="该父体当前已开启的手动广告活动数（暂停 / 归档不算）">
+                    手动广告 <span class="ml-1 text-[10px]" :class="sortArrowClass('manual_count')">{{ sortIcon('manual_count') }}</span>
+                  </th>
                   <th class="p-3">清洗后品名（核心首词中文 · 可编辑）</th>
-                  <th class="p-3 text-center">子体数</th>
-                  <th class="p-3 text-right">客单均价 (JPY)</th>
-                  <th class="p-3 text-center">中位数比率</th>
+                  <th class="p-3 text-center cursor-pointer select-none whitespace-nowrap hover:text-blue-600"
+                      @click="toggleSort('child_count')" title="点击按子体数排序">
+                    子体数 <span class="ml-1 text-[10px]" :class="sortArrowClass('child_count')">{{ sortIcon('child_count') }}</span>
+                  </th>
+                  <th class="p-3 text-right cursor-pointer select-none whitespace-nowrap hover:text-blue-600"
+                      @click="toggleSort('avg_price')" title="点击按客单均价排序">
+                    客单均价 (JPY) <span class="ml-1 text-[10px]" :class="sortArrowClass('avg_price')">{{ sortIcon('avg_price') }}</span>
+                  </th>
+                  <th class="p-3 text-center cursor-pointer select-none whitespace-nowrap hover:text-blue-600"
+                      @click="toggleSort('median_ratio')" title="点击按中位数比率排序">
+                    中位数比率 <span class="ml-1 text-[10px]" :class="sortArrowClass('median_ratio')">{{ sortIcon('median_ratio') }}</span>
+                  </th>
                   <th class="p-3 w-36 text-right">分配预算 (JPY)</th>
                   <th class="p-3 w-32 text-center whitespace-nowrap" title="顶部填统一默认值；这里可对单个父体覆盖，留空即跟随顶部">
                     4 组竞价 / 溢价
@@ -533,6 +544,22 @@
                           class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-50 text-slate-400 border border-dashed border-slate-300"
                           :title="adCoverageError || '尚未读取广告状态，点表头 ↻ 重试'">未知</span>
                   </td>
+                  <td class="p-3 text-center" :title="adCountTitle(item)">
+                    <span v-if="adStateOf(item) === null" class="text-[11px] text-slate-400" title="尚未读取广告状态">—</span>
+                    <span v-else-if="adCountOf(item, 'auto_count') > 0"
+                          class="inline-block min-w-[1.75rem] px-1.5 py-0.5 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-300">
+                      {{ adCountOf(item, 'auto_count') }}
+                    </span>
+                    <span v-else class="text-[11px] text-slate-400">0</span>
+                  </td>
+                  <td class="p-3 text-center" :title="adCountTitle(item)">
+                    <span v-if="adStateOf(item) === null" class="text-[11px] text-slate-400" title="尚未读取广告状态">—</span>
+                    <span v-else-if="adCountOf(item, 'manual_count') > 0"
+                          class="inline-block min-w-[1.75rem] px-1.5 py-0.5 rounded-md text-[11px] font-bold bg-violet-50 text-violet-700 border border-violet-300">
+                      {{ adCountOf(item, 'manual_count') }}
+                    </span>
+                    <span v-else class="text-[11px] text-slate-400">0</span>
+                  </td>
                   <td class="p-3">
                     <div class="flex items-center gap-1.5">
                       <input v-model="item.product_name"
@@ -568,7 +595,7 @@
 
                 <!-- 单个父体的竞价 / 溢价覆盖面板（v2.10） -->
                 <tr v-if="bidEditorOpen === item.parent_sku" class="bg-blue-50/40">
-                  <td colspan="10" class="px-4 py-3 border-t border-blue-100">
+                  <td colspan="12" class="px-4 py-3 border-t border-blue-100">
                     <div class="flex flex-wrap items-end gap-x-7 gap-y-3">
                       <div>
                         <div class="text-[11px] font-semibold text-slate-600 mb-1.5">自动 4 组竞价 (JPY)</div>
@@ -620,7 +647,7 @@
                 </tr>
                 </template>
                 <tr v-if="!filteredProducts.length">
-                  <td colspan="10" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
+                  <td colspan="12" class="p-8 text-center text-slate-400">没有匹配「{{ skuSearchKeyword }}」的父 SKU</td>
                 </tr>
               </tbody>
             </table>
@@ -1618,7 +1645,8 @@
         const budgetMode = ref('equal');
         const singleBudgetInput = ref(100);
         const totalPoolBudgetInput = ref(10000);
-        const sortMode = ref('sku_asc');   // sku_asc | sku_desc | price_desc
+        const sortKey = ref('parent_sku');  // 表头点击排序的当前列
+        const sortDir = ref('asc');         // asc | desc
         const imgErrors = ref({});         // 图片加载失败标记 { parent_sku: true }
 
         const fileName = ref('');
@@ -1651,6 +1679,28 @@
           const shop = item._shop || selectedShop.value;
           const map = adCoverage.value[shop] || {};
           return map[String(item.parent_sku)] || null;
+        };
+
+        // 已开启的自动 / 手动广告活动数（null = 状态未读到，显示「—」）
+        const adCountOf = (item, key) => {
+          const st = adStateOf(item);
+          if (st === null) return null;
+          const n = Number(st[key]);
+          return Number.isFinite(n) ? n : 0;
+        };
+
+        const adCountTitle = (item) => {
+          const st = adStateOf(item);
+          if (st === null) return '尚未读取广告状态';
+          const parts = [
+            `自动 ${st.auto_count || 0} 条`,
+            `手动 ${st.manual_count || 0} 条`,
+          ];
+          if (st.other_count) parts.push(`类型不明 ${st.other_count} 条`);
+          if ((st.campaigns || []).length) {
+            parts.push('已开启：' + st.campaigns.join(' / '));
+          }
+          return parts.join('　');
         };
 
         const loadAdCoverage = async (shopName, sid, force = false) => {
@@ -1729,14 +1779,45 @@
         const naturalCompare = (a, b) =>
           String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
 
-        const sortLabel = computed(() =>
-          sortMode.value === 'price_desc' ? '客单价 高→低' : (sortMode.value === 'sku_asc' ? '父 SKU 升序' : '父 SKU 降序'));
+        // v2.11：点击表头排序（替代原来的「排序」下拉 + 父 SKU 旁的 ▲▼ 按钮）
+        // 状态：sortKey / sortDir（在上面与其它 ref 一起声明）
+        const toggleSort = (key) => {
+          if (sortKey.value === key) {
+            sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortKey.value = key;
+            // 数值型（价格 / 数量）默认从大到小，文本与状态默认升序
+            sortDir.value = ['avg_price', 'auto_count', 'manual_count', 'child_count', 'median_ratio'].includes(key)
+              ? 'desc' : 'asc';
+          }
+        };
 
-        const skuSortIcon = computed(() =>
-          sortMode.value === 'price_desc' ? '' : (sortMode.value === 'sku_asc' ? '▲' : '▼'));
+        const sortIcon = (key) => {
+          if (sortKey.value !== key) return '↕';
+          return sortDir.value === 'asc' ? '▲' : '▼';
+        };
 
-        const toggleSkuSort = () => {
-          sortMode.value = sortMode.value === 'sku_asc' ? 'sku_desc' : 'sku_asc';
+        const sortArrowClass = (key) =>
+          sortKey.value === key ? 'text-blue-600 font-bold' : 'text-slate-300';
+
+        // 广告状态排序权重：已开启 → 已暂停 → 未开启 → 未知
+        const AD_STATE_RANK = { enabled: 0, paused: 1, none: 2 };
+        const adStateRank = (item) => {
+          const st = adStateOf(item);
+          if (st === null) return 3;
+          return AD_STATE_RANK[st.state] ?? 2;
+        };
+
+        const sortValue = (item, key) => {
+          switch (key) {
+            case 'ad_state': return adStateRank(item);
+            case 'auto_count':
+            case 'manual_count': return adCountOf(item, key) ?? -1;
+            case 'child_count': return Number(item.child_count || 0);
+            case 'avg_price': return Number(item.avg_price || 0);
+            case 'median_ratio': return Number(item.median_ratio || 0);
+            default: return String(item.parent_sku || '');
+          }
         };
 
         const filteredProducts = computed(() => {
@@ -1755,14 +1836,15 @@
             list = list.filter(p => !(adStateOf(p) || {}).enabled);
           }
           const sorted = [...list];
-          if (sortMode.value === 'price_desc') {
-            sorted.sort((a, b) => Number(b.avg_price || 0) - Number(a.avg_price || 0));
-          } else {
-            sorted.sort((a, b) => {
-              const res = naturalCompare(a.parent_sku, b.parent_sku);
-              return sortMode.value === 'sku_asc' ? res : -res;
-            });
-          }
+          const key = sortKey.value;
+          const dir = sortDir.value === 'asc' ? 1 : -1;
+          sorted.sort((a, b) => {
+            if (key === 'parent_sku') return naturalCompare(a.parent_sku, b.parent_sku) * dir;
+            const va = sortValue(a, key);
+            const vb = sortValue(b, key);
+            if (va === vb) return naturalCompare(a.parent_sku, b.parent_sku);   // 同值时按父 SKU 稳定排列
+            return (va < vb ? -1 : 1) * dir;
+          });
           return sorted;
         });
 
@@ -3570,7 +3652,9 @@
           allShopsData, shopList, selectedShop, currentShopData, filteredProducts,
           selectedProducts, assignedTotal, isAllFilteredSelected, skuSearchKeyword,
           settings, budgetMode, singleBudgetInput, totalPoolBudgetInput,
-          sortMode, imgErrors, sortLabel, skuSortIcon, toggleSkuSort,
+          sortKey, sortDir, toggleSort, sortIcon, sortArrowClass,
+          adCountOf, adCountTitle,
+          imgErrors,
           refreshingNames, refreshNameMatching, isNameManuallyEdited,
           fileName, loading, loadingText, exporting, dragging, error, headerRow, resolvedCols,
           handleFileUpload, onDrop, onShopChange, toggleSelectFiltered, recalculateBudgets, exportBulkExcel,
