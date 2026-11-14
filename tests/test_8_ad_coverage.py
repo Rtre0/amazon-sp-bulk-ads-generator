@@ -18,7 +18,9 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 sys.stdout.reconfigure(encoding="utf-8")
 
-from core.ad_coverage import build_coverage, campaign_state, ad_product_sku  # noqa: E402
+from core.ad_coverage import (  # noqa: E402
+    build_coverage, campaign_state, campaign_type, ad_product_sku,
+)
 
 OK = FAIL = 0
 
@@ -106,9 +108,48 @@ print("\n[8] 汇总结构完整")
 for pk in PARENTS:
     entry = cov[pk]
     check(f"{pk} 结构完整",
-          set(entry) == {"enabled", "state", "campaigns", "paused_campaigns"},
+          set(entry) == {"enabled", "state", "campaigns", "paused_campaigns",
+                         "auto_count", "manual_count", "other_count"},
           str(sorted(entry)))
     check(f"{pk} 活动名最多 3 个", len(entry["campaigns"]) <= 3)
+
+print("\n[9] 活动类型判定（v2.11）")
+check("targetingType=auto", campaign_type({"targetingType": "auto"}) == "auto")
+check("targetingType 大小写不敏感", campaign_type({"targetingType": "MANUAL"}) == "manual")
+check("字段缺失按活动名「手动」兜底",
+      campaign_type({"campaignName": "hua226_犬小屋_手动_20261101"}) == "manual")
+check("字段缺失按活动名「自动」兜底",
+      campaign_type({"campaignName": "hua226_犬小屋_自动_20261101"}) == "auto")
+check("英文名 Auto 兜底", campaign_type({"campaignName": "SP-Auto-hua226"}) == "auto")
+check("判断不出返回空", campaign_type({"campaignName": "大杂烩-中客单-20260508"}) == "")
+
+print("\n[10] 已开启的自动 / 手动广告条数")
+# 同一活动下挂两条子体只能算 1 条；paused 不计入；类型不明单独归 other
+CAMPAIGNS2 = [
+    {"campaignId": "a1", "campaignName": "x1", "state": "enabled", "targetingType": "auto"},
+    {"campaignId": "a2", "campaignName": "x2", "state": "enabled", "targetingType": "auto"},
+    {"campaignId": "m1", "campaignName": "x3", "state": "enabled", "targetingType": "manual"},
+    {"campaignId": "p1", "campaignName": "x4", "state": "paused", "targetingType": "manual"},
+    {"campaignId": "u1", "campaignName": "x5", "state": "enabled"},
+]
+AD_PRODUCTS2 = [
+    {"campaignId": "a1", "sku": "pp1"},
+    {"campaignId": "a1", "sku": "pp1"},
+    {"campaignId": "a2", "sku": "pp1"},
+    {"campaignId": "m1", "sku": "pp1"},
+    {"campaignId": "p1", "sku": "pp1"},
+    {"campaignId": "u1", "sku": "pp1"},
+]
+cov4 = build_coverage({"pp1": ["pp1-1"]}, CAMPAIGNS2, AD_PRODUCTS2)
+check("自动活动计 2 条", cov4["pp1"]["auto_count"] == 2, str(cov4["pp1"]))
+check("手动活动计 1 条（暂停的不算）", cov4["pp1"]["manual_count"] == 1)
+check("类型不明归 other", cov4["pp1"]["other_count"] == 1)
+check("同活动多条子体不重复计数",
+      cov4["pp1"]["auto_count"] + cov4["pp1"]["manual_count"] + cov4["pp1"]["other_count"] == 4)
+check("没有任何广告的父体计数为 0",
+      cov["hua22"]["auto_count"] == 0 and cov["hua22"]["manual_count"] == 0)
+check("按活动名兜底也能分类", cov["hua226"]["auto_count"] == 1 and cov["hua226"]["manual_count"] == 0,
+      f"auto={cov['hua226']['auto_count']} manual={cov['hua226']['manual_count']}")
 
 print("\n" + "=" * 78)
 print(f"结果：PASS {OK}  FAIL {FAIL}")
