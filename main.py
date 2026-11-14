@@ -62,7 +62,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 版本号唯一来源：FastAPI 元数据与 /api/health 都读它，避免两处硬编码漂移。
 # 发布新版本时请同步更新 CHANGELOG.md 与 docs/RELEASE_NOTES_*.md。
-__version__ = "2.10.0"
+__version__ = "2.11.0"
 
 app = FastAPI(
     title="Amazon SP Bulk Ads Generator",

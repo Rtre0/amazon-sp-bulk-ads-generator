@@ -30,6 +30,10 @@ from typing import Any, Dict, Iterable, List, Optional
 # 状态字段在不同接口/版本里叫法不一，按优先级依次取
 _STATE_KEYS = ("state", "status", "campaignStatus")
 _SKU_KEYS = ("sku", "sellerSku", "msku")
+# 活动类型字段（赛狐实测返回 ``auto`` / ``manual``）
+_TYPE_KEYS = ("targetingType", "targeting_type", "campaignType", "autoType")
+_TYPE_AUTO = "auto"
+_TYPE_MANUAL = "manual"
 _ENABLED = "enabled"
 
 #: 单次批量查询广告商品的活动数（太大容易被接口截断）
@@ -49,6 +53,31 @@ def campaign_state(campaign: Dict[str, Any]) -> str:
         val = campaign.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip().lower()
+    return ""
+
+
+def campaign_type(campaign: Dict[str, Any]) -> str:
+    """判断活动是自动还是手动投放（v2.11）。
+
+    优先用接口字段 ``targetingType``（赛狐实测返回 ``auto`` / ``manual``，
+    对 2000 条活动抽样仅 1 条为空）；该字段缺失时再用活动名里的
+    「自动 / 手动」兜底 —— 本工具生成的活动名固定为
+    ``父SKU_品名_自动_YYYYMMDD`` / ``_手动_``。
+
+    两者都判断不出来返回空串，前端计入「其他」，不会被误算进自动或手动。
+    """
+    for key in _TYPE_KEYS:
+        val = campaign.get(key)
+        if isinstance(val, str) and val.strip():
+            low = val.strip().lower()
+            if low in (_TYPE_AUTO, _TYPE_MANUAL):
+                return low
+    name = _campaign_name(campaign)
+    if name:
+        if "手动" in name or re.search(r"(?i)\bmanual\b", name):
+            return _TYPE_MANUAL
+        if "自动" in name or re.search(r"(?i)\bauto\b", name):
+            return _TYPE_AUTO
     return ""
 
 
@@ -91,7 +120,12 @@ def build_coverage(
 
     Returns:
         ``{父SKU: {"enabled": bool, "state": "enabled"|"paused"|"none",
-        "campaigns": [已开启的活动名], "paused_campaigns": [暂停的活动名]}}``
+        "campaigns": [已开启的活动名], "paused_campaigns": [暂停的活动名],
+        "auto_count": 已开启的自动活动数, "manual_count": 已开启的手动活动数,
+        "other_count": 类型不明的已开启活动数}}``
+
+    ``auto_count`` / ``manual_count`` 按**活动**计数（同一父体多个子体挂在
+    同一个活动里只算 1 条），依据活动字段 ``targetingType``，缺失时按活动名兜底。
     """
     # SKU → 父 SKU（一个 MSKU 理论上只属于一个父体，用 set 兜住脏数据）
     sku_to_parents: Dict[str, set] = {}
@@ -106,18 +140,25 @@ def build_coverage(
 
     state_by_cid: Dict[str, str] = {}
     name_by_cid: Dict[str, str] = {}
+    type_by_cid: Dict[str, str] = {}
     for camp in campaigns or []:
         cid = _campaign_id(camp)
         if not cid:
             continue
         state_by_cid[cid] = campaign_state(camp)
         name_by_cid[cid] = _campaign_name(camp)
+        type_by_cid[cid] = campaign_type(camp)
 
     result: Dict[str, Dict[str, Any]] = {
         str(pk): {"enabled": False, "state": "none",
-                  "campaigns": [], "paused_campaigns": []}
+                  "campaigns": [], "paused_campaigns": [],
+                  "auto_count": 0, "manual_count": 0, "other_count": 0}
         for pk in parents.keys()
     }
+
+    # 每个父体「已开启」的活动 ID 集合：按活动计数，先收集合再分类，
+    # 避免同一活动下的多个子体把计数放大。
+    enabled_cids: Dict[str, set] = {}
 
     def _mark(parent_sku: str, cid: str) -> None:
         entry = result.get(parent_sku)
@@ -127,6 +168,7 @@ def build_coverage(
         label = name_by_cid.get(cid) or cid
         if state == _ENABLED:
             entry["enabled"] = True
+            enabled_cids.setdefault(parent_sku, set()).add(cid)
             if label not in entry["campaigns"]:
                 entry["campaigns"].append(label)
         elif state:
@@ -161,7 +203,14 @@ def build_coverage(
                     _mark(parent_sku, cid)
 
     # 3) 汇总状态：只要有一个 enabled 就算开启；否则有活动记为 paused
-    for entry in result.values():
+    for pk, entry in result.items():
+        cids = enabled_cids.get(pk, set())
+        auto = sum(1 for c in cids if type_by_cid.get(c) == _TYPE_AUTO)
+        manual = sum(1 for c in cids if type_by_cid.get(c) == _TYPE_MANUAL)
+        entry["auto_count"] = auto
+        entry["manual_count"] = manual
+        entry["other_count"] = len(cids) - auto - manual
+
         if entry["enabled"]:
             entry["state"] = _ENABLED
         elif entry["paused_campaigns"]:
@@ -239,5 +288,8 @@ def fetch_coverage(
             "enabled": enabled,
             "paused": paused,
             "none": len(coverage) - enabled - paused,
+            # 有多少个父体至少开着 1 条自动 / 手动广告（v2.11）
+            "auto_enabled": sum(1 for v in coverage.values() if v["auto_count"] > 0),
+            "manual_enabled": sum(1 for v in coverage.values() if v["manual_count"] > 0),
         },
     }
