@@ -1153,6 +1153,16 @@
         </div>
       </section>
 
+      <!-- 业务报告未到提示 -->
+      <div v-if="dailyData && dailyData.summary.pending_days && dailyData.summary.pending_days.length"
+           id="daily-pending-hint"
+           class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 leading-5">
+        <strong>这些日期的会话次数还没到：</strong>
+        <span class="font-semibold">{{ dailyData.summary.pending_days.map(dayLabel).join('、') }}</span>
+        —— 赛狐侧的亚马逊业务报告还没同步过来（广告点击已经拿到了）。亚马逊后台一般 T+1 就能看到，赛狐会晚一步；
+        隔天再点一次「同步」，数会自动补上，不用手动填。
+      </div>
+
       <!-- 表格 -->
       <section class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="overflow-auto max-h-[72vh]">
@@ -1185,7 +1195,9 @@
                   </td>
                   <td v-for="d in dailyDays" :key="d"
                       class="border-b border-r border-slate-100 px-1 py-1.5 text-center tabular-nums whitespace-nowrap"
-                      :class="[metric.cellClass, isWeekend(d) ? 'bg-slate-50/60' : '']">
+                      :class="[metric.cellClass, isWeekend(d) ? 'bg-slate-50/60' : '']"
+                      :style="isPending(shop, d, metric.key) ? 'background:#fffbeb !important;color:#b45309 !important;font-weight:600' : ''"
+                      :title="isPending(shop, d, metric.key) ? pendingTitle(shop, d) : ''">
                     {{ dailyCellText(shop, d, metric.key) }}
                   </td>
                 </tr>
@@ -3824,10 +3836,26 @@
         const dailyCellText = (shop, day, key) => {
           const cell = shop && shop.cells ? shop.cells[day] : null;
           if (!cell) return '';
+          // 广告有点击却零会话：赛狐侧业务报告还没同步到这一天
+          if (key === 'sessions' && cell.pending) return '未到';
           const v = cell[key];
           if (v === null || v === undefined) return '—';
           if (key === 'ratio' || key === 'cost_per_session') return Number(v).toFixed(2);
           return Number(v).toLocaleString('en-US');
+        };
+
+        // 该格是否属于「业务报告未到」的日期（广告点击行有值，不算缺）
+        const isPending = (shop, day, key) => {
+          const cell = shop && shop.cells ? shop.cells[day] : null;
+          if (!cell || !cell.pending) return false;
+          return key !== 'clicks';
+        };
+
+        const pendingTitle = (shop, day) => {
+          const cell = shop && shop.cells ? shop.cells[day] : null;
+          const clicks = cell ? Number(cell.clicks || 0) : 0;
+          return `赛狐侧业务报告还没同步到这一天（广告点击已有 ${clicks} 次）。
+亚马逊后台通常 T+1 就能看到，赛狐会晚一步；隔天再点一次「同步」即可自动补上。`;
         };
 
         const loadDailyTable = async () => {
@@ -3921,6 +3949,7 @@
           /* 店铺日报 v2.13 */
           dailyMonth, dailyData, dailyLoading, dailySyncing, dailyMsg, dailyShowEmpty,
           dailyDays, dailyMetrics, dayLabel, isWeekend, dailyCellText,
+          isPending, pendingTitle,
           loadDailyTable, syncDaily,
           /* 自动广告 v10 */
           allShopsData, shopList, selectedShop, currentShopData, filteredProducts,

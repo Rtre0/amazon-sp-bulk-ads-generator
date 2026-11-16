@@ -3,20 +3,20 @@
 > 亚马逊 SP 广告投放工作台：**赛狐 ERP 数据进来 → 商品与搜索词分析 → 自动广告、手动广告批量开出来**。
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-v2.13.0-2f81f7">
+  <img alt="version" src="https://img.shields.io/badge/version-v2.13.1-2f81f7">
   <img alt="python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python\&logoColor=white">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs\&logoColor=white">
   <img alt="tests" src="https://img.shields.io/badge/%E9%AA%8C%E6%94%B6%E6%B5%8B%E8%AF%95-324%20assertions-success">
 </p>
 
-> **当前版本 v2.13.0 · 2026-11-16**
+> **当前版本 v2.13.1 · 2026-11-16**
 > v2.7.0 起把 GitHub 上停留在 **v10.0.0（2026-10-30）** 的仓库补齐到最新；
 > v2.8.0 增加店铺命名与按名字排序，修掉「查询并同步」按钮无响应；
 > v2.9.0 增加平滑调价（低价多涨、高价少涨）并统一了整站视觉；
 > v2.10.0 让每个父体可以单独设 4 组竞价与 3 个广告位溢价，顶部只作为统一默认值；
 > v2.11.0 增加「自动广告 / 手动广告」条数列，并把排序改成点列名切换；
 > v2.12.0 修好搜索词缺 ASIN 时按钮变灰无法点击的问题，并加上「补全 ASIN」；
-> v2.13.0 新增「店铺日报」页：每天一行四项指标，整月走势一屏看完。
+> v2.13.1 给「店铺日报」加了数据未到提示：赛狐还没同步的日期会标成「未到」，不再显示成 0。
 
 ## 文档
 

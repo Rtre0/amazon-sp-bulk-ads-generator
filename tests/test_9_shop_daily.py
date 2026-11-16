@@ -92,6 +92,18 @@ zero = table["shops"][1]["cells"]["2026-11-13"]
 check("会话 0 → ratio 为 None", zero["ratio"] is None, str(zero["ratio"]))
 check("会话 0 → 花费÷会话为 None", zero["cost_per_session"] is None, str(zero["cost_per_session"]))
 
+# ---------------------------------------------------------------- 4b. 未到标记
+print("\n[4b] 业务报告未到标记")
+check("有广告点击但零会话 → pending", zero["pending"] is True, str(zero["pending"]))
+check("正常有会话的格子不算未到", cell["pending"] is False, str(cell["pending"]))
+check("summary.pending_days 标出未到日期",
+      table["summary"]["pending_days"] == ["2026-11-13"],
+      str(table["summary"]["pending_days"]))
+oct_table = sd.build_month_table("2026-10")
+check("整月无数据时 pending_days 为空",
+      oct_table["summary"]["pending_days"] == [],
+      str(oct_table["summary"]["pending_days"]))
+
 # ---------------------------------------------------------------- 5. 占位行
 print("\n[5] 显示无数据店铺")
 table_all = sd.build_month_table("2026-11", include_empty=True)

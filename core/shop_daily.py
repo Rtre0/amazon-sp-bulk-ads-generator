@@ -307,6 +307,9 @@ def build_month_table(month: str, include_empty: bool = False) -> Dict[str, Any]
             sess = cell["sessions"]
             cell["ratio"] = round((sess - cell["clicks"]) / sess, 4) if sess else None
             cell["cost_per_session"] = round(cell["cost"] / sess, 2) if sess else None
+            # 有广告点击却零会话：广告数据已到、业务报告还没同步到这一天。
+            # 广告点击必然带来会话，所以这种组合只可能是上游缺数，不是真的 0。
+            cell["pending"] = sess == 0 and cell["clicks"] > 0
         shops.append(entry)
 
     # 没有数据的店铺：默认不显示，勾选后才占位
@@ -332,6 +335,16 @@ def build_month_table(month: str, include_empty: bool = False) -> Dict[str, Any]
         (day_strs[0], day_strs[-1]),
     ).fetchone()
 
+    # 全月「业务报告未到」的日期：这一天所有有数据的店铺都是零会话
+    pending_days = [
+        d
+        for d in day_strs
+        if any(
+            s["cells"].get(d, {}).get("pending")
+            for s in shops
+        )
+    ]
+
     return {
         "ok": True,
         "month": month,
@@ -341,6 +354,7 @@ def build_month_table(month: str, include_empty: bool = False) -> Dict[str, Any]
             "shops": len(shops),
             "days": len(day_strs),
             "cells": sum(len(s["cells"]) for s in shops),
+            "pending_days": pending_days,
             "last_sync": (last_sync["t"] if last_sync and last_sync["t"] else ""),
         },
     }
