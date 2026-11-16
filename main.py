@@ -56,13 +56,14 @@ from core import paths
 from core import sellfox_client as sf
 from core import sync_service
 from core import scheduler
+from core import shop_daily
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 版本号唯一来源：FastAPI 元数据与 /api/health 都读它，避免两处硬编码漂移。
 # 发布新版本时请同步更新 CHANGELOG.md 与 docs/RELEASE_NOTES_*.md。
-__version__ = "2.11.0"
+__version__ = "2.13.0"
 
 app = FastAPI(
     title="Amazon SP Bulk Ads Generator",
@@ -1135,17 +1136,59 @@ def trigger_search_sync(req: SyncTriggerRequest):
         results: List[Dict[str, Any]] = []
         skipped = 0
         synced = 0
+        healed = 0
         for sid, sname in targets:
             todo = dates
+            heal: List[str] = []
             if not req.force:
                 todo = [d for d in dates if db.count_rows_for_date(sid, d)["total"] == 0]
                 skipped += len(dates) - len(todo)
-            if not todo:
+                # 本地已有数据、但 ASIN 为空的日期：说明上次「活动 → 广告产品」映射
+                # 没拉全（限流/超时）。增量同步会跳过这些日期，坏数据永远修不好，
+                # 手动广告「按行 ASIN」就一直用不了 → 这里顺手补一次映射。
+                heal = [
+                    d for d in dates
+                    if d not in todo and db.count_missing_asin(sid, d) > 0
+                ]
+            if not todo and not heal:
                 continue
             shop_row = db.get_shop(sid) or {}
             acc_id = shop_row.get("account_id") or req.account_id or ""
             ctx = sf.use_account(acc_id) if acc_id else contextlib.nullcontext()
             with ctx:
+                heal_broken = False
+                for d in heal:
+                    if heal_broken:
+                        break
+                    try:
+                        fix = sync_service.fill_missing_asin(sid, d, d)
+                        if fix.get("updated"):
+                            healed += 1
+                            results.append({
+                                "shop_id": sid,
+                                "shop_name": sname,
+                                "report_date": d,
+                                "asin_filled": fix["updated"],
+                                "asin_missing": fix["remaining"],
+                            })
+                        # 一条都补不上、还带错误（多半是这家店不属于当前 Cookie 账号），
+                        # 后面的日期也别再试了，否则 30 天 × 3 次重试能卡好几分钟
+                        if fix.get("errors") and not fix.get("updated"):
+                            heal_broken = True
+                            results.append({
+                                "shop_id": sid,
+                                "shop_name": sname,
+                                "report_date": d,
+                                "error": f"补全 ASIN 失败：{fix['errors'][0]}",
+                            })
+                    except Exception as exc:  # noqa: BLE001 - 补全失败不影响主同步
+                        heal_broken = True
+                        results.append({
+                            "shop_id": sid,
+                            "shop_name": sname,
+                            "report_date": d,
+                            "error": f"补全 ASIN 失败：{exc}",
+                        })
                 for d in todo:
                     # 单店单日失败（权限 / 限流 / 网络）不该让整个区间前功尽弃，
                     # 记一条 error 继续跑下一天，前端会把它显示成「权限提示」
@@ -1168,12 +1211,50 @@ def trigger_search_sync(req: SyncTriggerRequest):
             "shops": len(targets),
             "synced": synced,      # 实际拉取的「店铺 × 日期」组合数
             "skipped": skipped,    # 因本地已有数据而跳过的组合数
+            "healed": healed,      # 顺带补全过 ASIN 的「店铺 × 日期」数
             "results": results,
         }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"同步失败：{exc}")
+
+
+class FillAsinRequest(BaseModel):
+    """补全 ASIN 请求（v2.12）。
+
+    本地已有搜索词、但 asin/msku 为空时用：只回查「活动 → 广告产品」映射，
+    不重拉指标，所以几秒钟就能修好一整天。
+    """
+    shop_id: str = ""
+    start_date: str = ""
+    end_date: str = ""
+
+
+@app.post("/api/search-terms/fill-asin")
+def fill_search_term_asin(req: FillAsinRequest):
+    """给本地空 ASIN 的搜索词补上商品映射。"""
+    if not req.shop_id:
+        raise HTTPException(400, "请先选择店铺")
+    start = (req.start_date or req.end_date or "").strip()
+    if not start:
+        raise HTTPException(400, "请先选择日期区间")
+    end = (req.end_date or start).strip()
+    shop = db.get_shop(req.shop_id) or {}
+    if not shop:
+        raise HTTPException(404, f"店铺不存在：{req.shop_id}")
+    acc_id = shop.get("account_id") or ""
+    ctx = sf.use_account(acc_id) if acc_id else contextlib.nullcontext()
+    try:
+        with ctx:
+            res = sync_service.fill_missing_asin(req.shop_id, start, end)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"补全 ASIN 失败：{exc}") from exc
+    res["ok"] = True
+    res["shop_name"] = shop.get("shop_name") or ""
+    return res
 
 
 # ===========================================================================
@@ -1467,6 +1548,48 @@ def create_manual_via_api(req: ManualAdCreateRequest):
 
 
 # ===========================================================================
+# v2.13 店铺日报（广告点击 / 会话 / 花费÷会话）
+# ===========================================================================
+class ShopDailySyncRequest(BaseModel):
+    """同步请求。日期留空 = 最近 7 天（截止昨天）。"""
+
+    start_date: str = ""
+    end_date: str = ""
+    account_ids: Optional[List[str]] = None
+
+
+@app.post("/api/shop-daily/sync")
+def sync_shop_daily(req: ShopDailySyncRequest):
+    """拉取指定日期区间的店铺流量 / 广告数据并入库。"""
+    today = datetime.date.today()
+    end = req.end_date or (today - datetime.timedelta(days=1)).isoformat()
+    start = req.start_date or (today - datetime.timedelta(days=7)).isoformat()
+    try:
+        return shop_daily.sync_range(start, end, req.account_ids)
+    except ValueError as exc:
+        raise HTTPException(400, f"日期格式应为 YYYY-MM-DD：{exc}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"同步失败：{exc}")
+
+
+@app.get("/api/shop-daily/table")
+def shop_daily_table(month: str = "", include_empty: int = 0):
+    """按月份返回「店铺 × 日期」表格数据（A→Z 排序）。"""
+    try:
+        return shop_daily.build_month_table(month, include_empty=bool(include_empty))
+    except ValueError:
+        raise HTTPException(400, "月份格式应为 YYYY-MM")
+
+
+@app.get("/api/shop-daily/months")
+def shop_daily_months():
+    """库里已有数据的月份列表，供前端下拉。"""
+    return {"ok": True, "months": shop_daily.available_months()}
+
+
+# ===========================================================================
 # v2.0 定时任务管理
 # ===========================================================================
 @app.get("/api/scheduler/status")
@@ -1630,6 +1753,7 @@ def _open_browser(url: str) -> None:
 def _on_startup():
     """应用启动时初始化数据库和调度器。"""
     db.init_db()
+    shop_daily.ensure_table()
     scheduler.start_scheduler()
 
 

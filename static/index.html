@@ -208,6 +208,11 @@
                        activeTab === 'manual' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
         🔍 手动广告 · 搜索词拓词
       </button>
+      <button @click="switchTab('daily')"
+              :class="['px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+                       activeTab === 'daily' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
+        📊 店铺日报
+      </button>
       <button @click="switchTab('sync')"
               :class="['px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
                        activeTab === 'sync' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100']">
@@ -900,8 +905,9 @@
             <div class="text-xs text-slate-500">
               共 <strong class="text-slate-800">{{ mtTotal }}</strong> 条匹配 ·
               已勾选 <strong class="text-blue-600">{{ mtSelected.length }}</strong> 个关键词
-              <span v-if="mtTargetMode === 'row'" class="ml-2 text-emerald-600">
-                → 按行 ASIN 一对一（<strong class="text-emerald-700">{{ mtAutoTargetableCount }}</strong> 个 ASIN）
+              <span v-if="mtTargetMode === 'row'" class="ml-2"
+                    :class="mtAutoTargetableCount ? 'text-emerald-600' : 'text-amber-600'">
+                → 按行 ASIN 一对一（<strong :class="mtAutoTargetableCount ? 'text-emerald-700' : 'text-amber-700'">{{ mtAutoTargetableCount }}</strong> 个 ASIN）
               </span>
               <span v-else-if="mtTargetSku" class="ml-2 text-slate-400">→ 目标：<strong class="text-slate-700">{{ mtTargetSku }}</strong></span>
             </div>
@@ -911,15 +917,37 @@
                 {{ mtAllSelected ? '取消全选' : '全选当前结果' }}
               </button>
               <button @click="exportManualBulk" :disabled="!mtSelected.length || !mtTargetReady || mtExporting"
+                      :title="mtBlockedReason || '导出亚马逊 Bulk 表'"
                       class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
                 {{ mtExporting ? '生成中…' : '导出手动广告 Bulk' }}
               </button>
               <button @click="createManualViaApi" :disabled="!mtSelected.length || !mtTargetReady || mtCreating"
-                      class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors"
-                      title="直接推送到赛狐后台创建广告活动">
+                      :title="mtBlockedReason || '直接推送到赛狐后台创建广告活动'"
+                      class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
                 {{ mtCreating ? '创建中…' : '⚡ 接口直推创建' }}
               </button>
             </div>
+          </div>
+
+          <!-- 没有 ASIN 时的明确提示：灰按钮必须给出原因和出路 -->
+          <div v-if="mtTargetMode === 'row' && mtSelected.length && mtAsinMissingCount"
+               class="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <span class="text-[11px] text-amber-900">
+              ⚠️ 勾选的 {{ mtSelected.length }} 行里有
+              <strong>{{ mtAsinMissingCount }}</strong> 行没有 ASIN，
+              「按行 ASIN」建不出商品广告，所以两个按钮暂时不能点。
+            </span>
+            <button @click="fillMissingAsin" :disabled="mtFillingAsin"
+                    class="px-2.5 py-1 border border-amber-300 bg-white hover:bg-amber-100 disabled:opacity-50 text-amber-800 text-[11px] font-semibold rounded-lg transition-colors"
+                    title="只回查「活动 → 广告商品」映射，不重拉指标，几秒钟完成">
+              {{ mtFillingAsin ? '补全中…' : '补全 ASIN' }}
+            </button>
+            <button @click="mtTargetMode = 'sku'"
+                    class="px-2.5 py-1 border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 text-[11px] font-semibold rounded-lg transition-colors"
+                    title="改成投某个父体的全部子体，不需要 ASIN">
+              改用父 SKU 投放
+            </button>
+            <span v-if="mtFillMsg" class="text-[11px] text-amber-800">{{ mtFillMsg }}</span>
           </div>
 
           <!-- 广告活动命名 -->
@@ -1088,7 +1116,100 @@
     </div>
 
     <!-- ========================================================= -->
-    <!-- ============ TAB 3：同步与 Cookie 设置 ================= -->
+    <!-- ============ TAB 3：店铺日报 =========================== -->
+    <!-- ========================================================= -->
+    <div v-show="activeTab === 'daily'" class="space-y-5">
+
+      <!-- 工具栏 -->
+      <section class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2">
+          <label class="text-xs font-semibold text-slate-600 whitespace-nowrap">月份</label>
+          <input type="month" v-model="dailyMonth" @change="loadDailyTable"
+                 class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+
+        <button @click="syncDaily(7)" :disabled="dailySyncing"
+                class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors">
+          {{ dailySyncing ? '同步中…' : '同步最近 7 天' }}
+        </button>
+        <button @click="syncDaily(0)" :disabled="dailySyncing"
+                class="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-semibold rounded-lg transition-colors">
+          同步本月
+        </button>
+
+        <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none ml-1">
+          <input type="checkbox" v-model="dailyShowEmpty" @change="loadDailyTable" class="accent-blue-600 w-3.5 h-3.5" />
+          显示无数据店铺
+        </label>
+
+        <span id="daily-msg" class="text-xs text-slate-500 whitespace-pre-line">{{ dailyMsg }}</span>
+
+        <div v-if="dailyData" class="ml-auto flex items-center gap-3 text-xs text-slate-500">
+          <span>店铺 <strong class="text-slate-800">{{ dailyData.summary.shops }}</strong></span>
+          <span class="text-slate-300">|</span>
+          <span>有数据 <strong class="text-slate-800">{{ dailyData.summary.cells }}</strong> 格</span>
+          <span class="text-slate-300">|</span>
+          <span>最后同步 <strong class="text-slate-800">{{ (dailyData.summary.last_sync || '—').replace('T', ' ') }}</strong></span>
+        </div>
+      </section>
+
+      <!-- 表格 -->
+      <section class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="overflow-auto max-h-[72vh]">
+          <table id="daily-table" class="border-collapse text-xs w-full">
+            <thead class="sticky top-0 z-30">
+              <tr>
+                <th class="sticky left-0 z-40 bg-slate-50 border-b border-r border-slate-200 px-3 py-2 text-left font-semibold text-slate-700 min-w-[132px]">店铺</th>
+                <th class="sticky z-40 bg-slate-50 border-b border-r border-slate-200 px-2 py-2 text-left font-semibold text-slate-500 whitespace-nowrap" style="left:132px;min-width:74px">指标</th>
+                <th v-for="d in dailyDays" :key="d"
+                    class="bg-slate-50 border-b border-r border-slate-200 px-1 py-2 text-center font-semibold text-slate-600 whitespace-nowrap min-w-[58px]"
+                    :class="isWeekend(d) ? 'bg-slate-100' : ''">
+                  {{ dayLabel(d) }}
+                </th>
+              </tr>
+            </thead>
+            <tbody v-if="dailyData && dailyData.shops.length">
+              <template v-for="shop in dailyData.shops" :key="shop.shop_id">
+                <tr v-for="(metric, mi) in dailyMetrics" :key="shop.shop_id + '-' + metric.key"
+                    :class="metric.rowClass">
+                  <td v-if="mi === 0" :rowspan="dailyMetrics.length"
+                      class="sticky left-0 z-20 border-b border-r border-slate-200 px-3 py-2 align-middle font-semibold text-slate-800"
+                      style="background:#fff9e6"
+                      :title="shop.shop_name">
+                    <div class="truncate max-w-[120px]">{{ shop.display_name }}</div>
+                    <div v-if="!Object.keys(shop.cells).length" class="text-[10px] font-normal text-slate-400 mt-0.5">无数据</div>
+                  </td>
+                  <td class="sticky z-20 border-b border-r border-slate-200 px-2 py-1.5 whitespace-nowrap text-[11px] text-slate-500"
+                      style="left:132px" :class="metric.rowClass">
+                    {{ metric.label }}
+                  </td>
+                  <td v-for="d in dailyDays" :key="d"
+                      class="border-b border-r border-slate-100 px-1 py-1.5 text-center tabular-nums whitespace-nowrap"
+                      :class="[metric.cellClass, isWeekend(d) ? 'bg-slate-50/60' : '']">
+                    {{ dailyCellText(shop, d, metric.key) }}
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+            <tbody v-else>
+              <tr>
+                <td :colspan="dailyDays.length + 2" class="px-4 py-16 text-center text-sm text-slate-400">
+                  本月还没有数据，点上方「同步最近 7 天」或「同步本月」拉取
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="text-[11px] text-slate-400 leading-relaxed">
+        口径：广告点击 / 广告花费取自赛狐店铺维度报表（SP + SB + SD 合计）；会话次数来自亚马逊业务报告，通常 T+1 ~ T+4 才有数。
+        数据入库后与 Cookie 无关，换账号也能查看。
+      </div>
+    </div>
+
+    <!-- ========================================================= -->
+    <!-- ============ TAB 4：同步与 Cookie 设置 ================= -->
     <!-- ========================================================= -->
     <div v-show="activeTab === 'sync'" class="space-y-5">
 
@@ -3036,11 +3157,22 @@
         // 「按行 ASIN」模式下，真正能建出商品广告的行数（必须有合法 ASIN）
         const mtAutoTargetableCount = computed(() =>
           mtSelected.value.filter(r => !!asinOf(r)).length);
+        // 勾选了、但没有 ASIN 的行数：>0 时按钮会被禁用，必须把原因说清楚
+        const mtAsinMissingCount = computed(() =>
+          Math.max(0, mtSelected.value.length - mtAutoTargetableCount.value));
         // 目标是否就绪：row 模式看勾选行里有没有 ASIN，sku 模式看有没有选父体
         const mtTargetReady = computed(() =>
           mtTargetMode.value === 'row'
             ? mtAutoTargetableCount.value > 0
             : !!mtTargetSku.value);
+        // 按钮为什么点不了（写进 title，别让人对着灰按钮猜）
+        const mtBlockedReason = computed(() => {
+          if (!mtSelected.value.length) return '请先勾选搜索词';
+          if (mtTargetMode.value === 'sku') return mtTargetSku.value ? '' : '请先选择目标父 SKU';
+          if (mtAutoTargetableCount.value > 0) return '';
+          return `勾选的 ${mtSelected.value.length} 行都没有 ASIN，按行投放建不出商品广告；`
+            + '点「补全 ASIN」重新拉取商品映射，或改用「手动选父 SKU」';
+        });
         const mtAllAsinTargeted = computed(() => {
           const candidates = mtRows.value.filter(r => asinOf(r));
           return candidates.length > 0 && candidates.every(r => r.target_asin);
@@ -3380,8 +3512,14 @@
               const asin = rs.reduce((s, r) => s + Number(r.asin_rows_inserted ?? 0), 0);
               mtSyncMsg.value = d.synced
                 ? `同步完成：拉取 ${d.synced} 个「店铺×日期」组合，入库 搜索词 ${kw} 条 / 投放ASIN ${asin} 条`
+                  + (d.healed ? `；顺带补全了 ${d.healed} 天的 ASIN` : '')
                   + (errs.length ? `；${errs.length} 条权限提示（该店铺不属于当前账号）` : '')
-                : `所选区间本地已有数据，跳过同步（${d.skipped || 0} 个组合）`;
+                : `所选区间本地已有数据，跳过同步（${d.skipped || 0} 个组合）`
+                  + (d.healed ? `；已补全 ${d.healed} 天缺失的 ASIN` : '');
+              const stillMissing = rs.reduce((s, r) => s + Number(r.asin_missing || 0), 0);
+              if (stillMissing) {
+                mtSyncMsg.value += `\n⚠️ 仍有 ${stillMissing} 条没有 ASIN（商品映射没拉全），可点「补全 ASIN」重试`;
+              }
               if (errs.length) mtSyncMsg.value += '\n' + errs.slice(0, 3).map(r => '⚠️ ' + (r.error || '')).join('\n');
             }
             await loadSearchTerms();
@@ -3391,6 +3529,42 @@
             await loadSearchTerms();   // 同步失败也把本地已有数据查出来
           } finally {
             mtSyncing.value = false;
+          }
+        };
+
+        /* ---- 补全 ASIN（v2.12）：只回查「活动 → 广告产品」映射，不重拉指标 ---- */
+        const mtFillingAsin = ref(false);
+        const mtFillMsg = ref('');
+        const fillMissingAsin = async () => {
+          if (mtFillingAsin.value) return;
+          const sid = mtShopId.value || '';
+          if (!sid) { showToast('请先在上方选择店铺'); return; }
+          const start = mtStartDate.value || '';
+          const end = mtEndDate.value || start;
+          if (!start) { showToast('请先选择日期区间'); return; }
+          mtFillingAsin.value = true;
+          mtFillMsg.value = '正在重新拉取商品映射…';
+          try {
+            const res = await fetch('/api/search-terms/fill-asin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shop_id: sid, start_date: start, end_date: end })
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || '补全失败');
+            const n = Number(d.updated || 0);
+            const left = Number(d.remaining || 0);
+            mtFillMsg.value = n
+              ? `已补全 ${n} 条 ASIN` + (left ? `，仍有 ${left} 条没有（该活动下没有广告商品）` : '')
+              : (left ? `${left} 条仍没有 ASIN：这些活动在赛狐里查不到广告商品（可能已归档）`
+                      : '没有需要补全的行');
+            if (n) {
+              await loadSearchTerms();   // 重新查询，让表格里的 ASIN 列刷新
+            }
+          } catch (e) {
+            mtFillMsg.value = '补全失败：' + (e.message || '网络异常');
+          } finally {
+            mtFillingAsin.value = false;
           }
         };
 
@@ -3619,12 +3793,108 @@
           }
         };
 
+        /* ============ v2.13 店铺日报 ============ */
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const isoOf = (dt) => `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+        const todayIso = () => isoOf(new Date());
+
+        const dailyMonth = ref(todayIso().slice(0, 7));
+        const dailyData = ref(null);
+        const dailyLoading = ref(false);
+        const dailySyncing = ref(false);
+        const dailyMsg = ref('');
+        const dailyShowEmpty = ref(false);
+
+        const dailyDays = computed(() => (dailyData.value ? dailyData.value.days : []));
+
+        // 每个店铺 4 行：点击 / 会话 / 点击占会话比 / 花费÷会话
+        const dailyMetrics = [
+          { key: 'clicks', label: '广告点击', rowClass: '', cellClass: 'text-slate-700' },
+          { key: 'sessions', label: '会话', rowClass: 'bg-slate-50', cellClass: 'text-slate-700' },
+          { key: 'ratio', label: '点击÷会话', rowClass: 'bg-[#fffbe8]', cellClass: 'text-slate-900 font-semibold' },
+          { key: 'cost_per_session', label: '花费÷会话', rowClass: '', cellClass: 'text-slate-700' },
+        ];
+
+        const dayLabel = (d) => `${Number(d.slice(8, 10))}日`;
+        const isWeekend = (d) => {
+          const wd = new Date(`${d}T00:00:00`).getDay();
+          return wd === 0 || wd === 6;
+        };
+
+        const dailyCellText = (shop, day, key) => {
+          const cell = shop && shop.cells ? shop.cells[day] : null;
+          if (!cell) return '';
+          const v = cell[key];
+          if (v === null || v === undefined) return '—';
+          if (key === 'ratio' || key === 'cost_per_session') return Number(v).toFixed(2);
+          return Number(v).toLocaleString('en-US');
+        };
+
+        const loadDailyTable = async () => {
+          dailyLoading.value = true;
+          try {
+            const q = `month=${encodeURIComponent(dailyMonth.value || '')}`
+              + `&include_empty=${dailyShowEmpty.value ? 1 : 0}`;
+            const res = await fetch('/api/shop-daily/table?' + q);
+            const d = await res.json();
+            if (!res.ok) { dailyMsg.value = d.detail || '读取失败'; return; }
+            dailyData.value = d;
+            if (!dailyMonth.value && d.month) dailyMonth.value = d.month;
+            // 不覆盖同步结果提示：只在「确实没数据」时补一句
+            if (!d.shops.length && !dailySyncing.value) dailyMsg.value = '本月还没有数据';
+          } catch (e) {
+            dailyMsg.value = '读取失败：' + (e.message || '网络异常');
+          } finally {
+            dailyLoading.value = false;
+          }
+        };
+
+        // days=7 最近 7 天；days=0 本月（1 号到今天）
+        const syncDaily = async (days) => {
+          if (dailySyncing.value) return;
+          dailySyncing.value = true;
+          dailyMsg.value = '正在同步，请稍候…';
+          try {
+            const now = new Date();
+            let start, end;
+            if (days === 0) {
+              // 本月：1 号到今天；若是历史月份，则到那个月的最后一天
+              const m = dailyMonth.value || todayIso().slice(0, 7);
+              const [y, mo] = m.split('-').map(Number);
+              const lastDay = new Date(y, mo, 0).getDate();
+              start = `${m}-01`;
+              end = m === todayIso().slice(0, 7) ? todayIso() : `${m}-${pad2(lastDay)}`;
+            } else {
+              end = isoOf(new Date(now.getTime() - 86400000));
+              start = isoOf(new Date(now.getTime() - days * 86400000));
+            }
+            const res = await fetch('/api/shop-daily/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ start_date: start, end_date: end }),
+            });
+            const r = await res.json();
+            if (!res.ok) { dailyMsg.value = r.detail || '同步失败'; return; }
+            dailyMsg.value = `同步完成 ${r.start_date} ~ ${r.end_date}：${r.shops} 家店 / ${r.rows} 条`
+              + (r.errors && r.errors.length ? `，${r.errors.length} 天失败` : '');
+            if (r.start_date) dailyMonth.value = r.start_date.slice(0, 7);
+            await loadDailyTable();
+          } catch (e) {
+            dailyMsg.value = '同步失败：' + (e.message || '网络异常');
+          } finally {
+            dailySyncing.value = false;
+          }
+        };
+
         /* ============ Tab 切换 ============ */
         const switchTab = async (tab) => {
           activeTab.value = tab;
           if (tab === 'manual') {
             if (!mtRows.value.length) await loadSearchTerms();
             await loadManualProducts();
+          }
+          if (tab === 'daily') {
+            await loadDailyTable();
           }
           if (tab === 'sync') {
             await loadSchedStatus(true);
@@ -3648,6 +3918,10 @@
         return {
           /* 通用 */
           activeTab, switchTab, toast, showToast, fmt, imgSrc,
+          /* 店铺日报 v2.13 */
+          dailyMonth, dailyData, dailyLoading, dailySyncing, dailyMsg, dailyShowEmpty,
+          dailyDays, dailyMetrics, dayLabel, isWeekend, dailyCellText,
+          loadDailyTable, syncDaily,
           /* 自动广告 v10 */
           allShopsData, shopList, selectedShop, currentShopData, filteredProducts,
           selectedProducts, assignedTotal, isAllFilteredSelected, skuSearchKeyword,
@@ -3698,6 +3972,7 @@
           MATCH_TYPE_OPTIONS, mtMatchTypes, toggleMatchType, mtMatchSummary,
           mtAsinBid, mtAsinTargetCount, mtAllAsinTargeted, toggleAllAsinTargets,
           mtTargetMode, mtTargetReady, mtAutoTargetableCount, mskuOf,
+          mtAsinMissingCount, mtBlockedReason, fillMissingAsin, mtFillingAsin, mtFillMsg,
           mtNameTemplate, mtNameMode, mtNameMatchMode, mtNameOverrides,
           nameKeyOf, nameForRow, finalNameForRow, isNameOverridden,
           setNameOverride, clearNameOverride, clearNameOverrides,
