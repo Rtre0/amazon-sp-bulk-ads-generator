@@ -474,6 +474,76 @@ def insert_search_terms_batch(rows: List[Dict[str, Any]]) -> int:
     return count
 
 
+# ---------------------------------------------------------------------------
+# ASIN 补全（v2.12）
+#
+# 搜索词行本身不带商品标识，ASIN/MSKU 是靠「活动 → 广告产品」映射补上去的。
+# 映射那次请求一旦失败（限流 / 超时 / 权限抖动），行照样会入库，只是 asin 为空。
+# 后果很隐蔽：手动广告「按行 ASIN」模式判定无 ASIN → 导出/直推按钮直接变灰。
+# 所以补全要能独立跑：只查缺 ASIN 的活动，不重拉指标。
+# ---------------------------------------------------------------------------
+def campaigns_missing_asin(shop_id: str, report_date: str) -> List[str]:
+    """某店某天里 ASIN 为空的行，涉及哪些活动（用于定向补映射）。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT campaign_id FROM ad_search_terms_daily
+        WHERE shop_id = ? AND report_date = ?
+          AND (asin IS NULL OR asin = '')
+          AND campaign_id <> ''
+        """,
+        (shop_id, report_date),
+    ).fetchall()
+    return [r["campaign_id"] for r in rows]
+
+
+def count_missing_asin(shop_id: str, report_date: str) -> int:
+    """某店某天 ASIN 为空的行数。"""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM ad_search_terms_daily
+        WHERE shop_id = ? AND report_date = ?
+          AND (asin IS NULL OR asin = '')
+        """,
+        (shop_id, report_date),
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def fill_asin_by_campaign(
+    shop_id: str,
+    report_date: str,
+    asin_map: Dict[str, Dict[str, str]],
+) -> int:
+    """按活动把 ASIN / MSKU 补到空行上，返回更新行数。
+
+    ``asin_map``：``{campaign_id: {"asin": "B0...", "msku": "xxx"}}``。
+    只动 asin 为空的行 —— 已有值（哪怕和映射不一致）不覆盖，
+    因为那可能是搜索词报表自带的、更精确的成交商品。
+    """
+    if not asin_map:
+        return 0
+    conn = get_conn()
+    updated = 0
+    for cid, info in asin_map.items():
+        asin = (info.get("asin") or "").strip()
+        if not asin:
+            continue
+        cur = conn.execute(
+            """
+            UPDATE ad_search_terms_daily
+               SET asin = ?, msku = ?
+             WHERE shop_id = ? AND report_date = ? AND campaign_id = ?
+               AND (asin IS NULL OR asin = '')
+            """,
+            (asin, (info.get("msku") or "").strip(), shop_id, report_date, cid),
+        )
+        updated += max(0, cur.rowcount)
+    conn.commit()
+    return updated
+
+
 def _num(v: Any, default: float = 0.0) -> float:
     try:
         return float(v) if v is not None else default

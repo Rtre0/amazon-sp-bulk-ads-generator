@@ -36,6 +36,116 @@ from core.translator import noun_matcher
 CAMPAIGN_BATCH_SIZE = 50
 
 
+def _fetch_ad_products_retry(
+    shop_id: str,
+    campaign_ids: List[str],
+    target_date: str,
+    attempts: int = 3,
+) -> tuple:
+    """拉广告产品映射，失败重试。
+
+    这个接口是搜索词行拿 ASIN 的唯一来源，但它在赛狐侧会**间歇性限流**：
+    连跑几十天区间同步时，跑到某一天开始连续返回空/报错，之后整天的行
+    就都没有 ASIN（实测 2026-11-14：10-20 起连续 24 天 ASIN 全空）。
+    以前异常被吞掉，前端只看到「0 个 ASIN」和两个灰按钮，查不出原因。
+    所以这里重试 + 把最后一次错误返回给调用方记录。
+
+    Returns:
+        ``(rows, error_message)``；成功时 error 为空串。
+    """
+    last_err = ""
+    for i in range(max(1, attempts)):
+        try:
+            return (
+                sf.fetch_ad_products(
+                    shop_id=shop_id,
+                    campaign_ids=campaign_ids,
+                    start_date=target_date,
+                    end_date=target_date,
+                ),
+                "",
+            )
+        except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+            last_err = f"{target_date} 广告产品映射失败：{exc}"
+            if i < attempts - 1:
+                time.sleep(0.8 * (i + 1))   # 0.8s → 1.6s 退避
+    return [], last_err
+
+
+def fill_missing_asin(
+    shop_id: str,
+    start_date: str,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """给本地已有、但 ASIN 为空的行补商品映射（不重拉指标）。
+
+    为什么单独做一个：区间同步时映射一旦失败，行已经入库了，而
+    ``force=False`` 的增量同步会跳过「本地已有数据」的日期，坏数据永远修不好。
+    这里只查缺 ASIN 的活动，几十行/几百行都是秒级完成。
+
+    Returns:
+        ``{"shop_id", "start_date", "end_date", "dates", "campaigns",
+        "updated", "remaining", "errors"}``
+    """
+    d0 = datetime.date.fromisoformat(str(start_date).strip())
+    d1 = datetime.date.fromisoformat(str((end_date or start_date)).strip())
+    if d0 > d1:
+        d0, d1 = d1, d0
+    span = (d1 - d0).days + 1
+    if span > 90:
+        raise ValueError(f"单次最多补 90 天，当前 {span} 天")
+
+    dates: List[Dict[str, Any]] = []
+    total_campaigns = 0
+    total_updated = 0
+    errors: List[str] = []
+
+    for i in range(span):
+        day = (d0 + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+        missing_before = db.count_missing_asin(shop_id, day)
+        if not missing_before:
+            continue
+
+        cids = db.campaigns_missing_asin(shop_id, day)
+        asin_map: Dict[str, Dict[str, str]] = {}
+        for j in range(0, len(cids), CAMPAIGN_BATCH_SIZE):
+            batch = cids[j : j + CAMPAIGN_BATCH_SIZE]
+            rows, err = _fetch_ad_products_retry(shop_id, batch, day)
+            if err:
+                errors.append(err)
+            for ap in rows:
+                cid = str(ap.get("campaignId") or "")
+                asin = str(ap.get("asin") or "").strip()
+                if not cid or not asin or cid in asin_map:
+                    continue
+                asin_map[cid] = {"asin": asin, "msku": str(ap.get("sku") or "")}
+            time.sleep(0.1)
+
+        updated = db.fill_asin_by_campaign(shop_id, day, asin_map)
+        remaining = db.count_missing_asin(shop_id, day)
+        total_campaigns += len(cids)
+        total_updated += updated
+        dates.append({
+            "report_date": day,
+            "campaigns": len(cids),
+            "mapped": len(asin_map),
+            "updated": updated,
+            "missing_before": missing_before,
+            "remaining": remaining,
+        })
+
+    return {
+        "shop_id": shop_id,
+        "start_date": d0.isoformat(),
+        "end_date": d1.isoformat(),
+        "dates": dates,
+        "campaigns": total_campaigns,
+        "updated": total_updated,
+        "remaining": sum(d["remaining"] for d in dates),
+        "errors": errors[:3],
+    }
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     """安全转 float（接口里数值字段常是字符串，如 ``'250.86'``）。"""
     try:
@@ -324,16 +434,13 @@ def sync_search_terms_for_shop(
 
     # 2. 获取广告产品（建立 campaignId → SKU/ASIN 映射）
     campaign_product_map: Dict[str, List[Dict[str, Any]]] = {}
+    ad_product_errors: List[str] = []
     for batch in batches:
-        try:
-            ad_products = sf.fetch_ad_products(
-                shop_id=shop_id,
-                campaign_ids=batch,
-                start_date=target_date,
-                end_date=target_date,
-            )
-        except Exception:
-            ad_products = []
+        ad_products, err = _fetch_ad_products_retry(shop_id, batch, target_date)
+        if err:
+            # 不再静默吞掉：映射失败会让整天的行都没有 ASIN，
+            # 下游「按行 ASIN」建手动广告会直接不可用，必须能看见原因。
+            ad_product_errors.append(err)
         for ap in ad_products:
             cid = ap.get("campaignId") or ""
             campaign_product_map.setdefault(cid, []).append(ap)
@@ -443,6 +550,10 @@ def sync_search_terms_for_shop(
             sum(1 for r in db_rows if int(r.get("ad_orders") or 0) > 0)
             + sum(1 for r in asin_db_rows if int(r.get("ad_orders") or 0) > 0)
         ),
+        # 入库后仍然没有 ASIN 的行数：>0 说明广告产品映射没拿全，
+        # 前端「按行 ASIN」建手动广告会用不了，需要补全（fill_missing_asin）。
+        "asin_missing": db.count_missing_asin(shop_id, target_date),
+        "ad_product_error": ad_product_errors[0] if ad_product_errors else "",
     }
 
 
